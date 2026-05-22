@@ -78,9 +78,6 @@ async def agent_websocket(websocket: WebSocket):
             await websocket.close()
             return
 
-        # Create memory bridge
-        memory = MemoryBridge(workspace)
-
         # Reuse existing agent or create new one
         if session_id in _active_agents:
             agent = _active_agents[session_id]
@@ -115,6 +112,7 @@ async def agent_websocket(websocket: WebSocket):
 
     except WebSocketDisconnect:
         print(f"[WebSocket] Client disconnected: {session_id}")
+        # Keep agent in memory for reconnection
     except Exception as e:
         print(f"[WebSocket] Error: {e}")
         try:
@@ -124,11 +122,9 @@ async def agent_websocket(websocket: WebSocket):
             })
         except:
             pass
+        # Keep agent in memory - don't delete on error so context is preserved
     finally:
-        # Cleanup
-        if session_id and session_id in _active_agents:
-            del _active_agents[session_id]
-
+        # Only cleanup websocket, keep agent alive for next request
         try:
             await websocket.close()
         except:

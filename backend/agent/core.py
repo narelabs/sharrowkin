@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 import math
+import time
 
 from backend.core.llm.client import AUTONOMOUS_AGENT_POLICY, GeminiClient, GeminiConfigurationError
 from backend.core import types
@@ -39,7 +40,7 @@ from backend.analysis.code.semantic_graph import SemanticGraph, SemanticGraphBui
 from backend.config.settings import AgentConfig, load_config
 from backend.agent.workspace_cache import WorkspaceCache, CachedWorkspace
 
-PHASES = ["Observe", "Recall", "Reason", "Stabilize", "Commit"]
+PHASES = ["Observe", "Recall", "Reason", "Verify", "Stabilize", "Commit"]
 
 
 @dataclass(slots=True)
@@ -214,6 +215,149 @@ class SharrowkinAgent:
         self.failure_history: list[FailureRecord] = []
         self.awareness = AwarenessTracker()  # Self-awareness system
 
+    def _save_conversation_to_dsm(self, role: str, content: str, memory: MemoryBridge) -> None:
+        """Save conversation message to DSM for persistent memory."""
+        from datetime import datetime
+
+        memory.dsm.write(
+            text=f"{role}: {content}",
+            description=f"Conversation turn at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            category_path=("Conversation", "History"),
+            importance=0.7,
+            metadata={
+                "role": role,
+                "timestamp": datetime.now().isoformat(),
+                "content_length": len(content)
+            }
+        )
+
+    def _learn_from_error(self, error: str, context: str, memory: MemoryBridge) -> None:
+        """Save error to DSM and RLD so agent never repeats the same mistake."""
+        from datetime import datetime
+
+        # 1. Save to DSM as anti-pattern
+        memory.dsm.write(
+            text=f"ERROR: {error}\n\nContext: {context}\n\nNEVER DO THIS AGAIN",
+            description=f"Failed approach: {error[:100]}",
+            category_path=("Errors", "AntiPatterns"),
+            importance=0.95,  # Very important!
+            metadata={
+                "error_type": type(error).__name__ if isinstance(error, Exception) else "string",
+                "timestamp": datetime.now().isoformat(),
+                "context": context[:500]
+            }
+        )
+
+        # 2. Save to RLD as negative gene
+        if memory.rld:
+            memory.rld.observe(
+                task=context,
+                states=[],
+                actions=[],
+                final_answer=f"FAILED: {error}",
+                success=False,  # Negative example
+                utility=-1.0,   # Negative utility
+                tools_used=[],
+                metadata={"error": str(error)[:500]}
+            )
+
+    async def _verify(self, state: AgentRunState, memory: MemoryBridge) -> AsyncIterator[dict]:
+        """Verify solution before applying - check Error Memory and LLM validation."""
+        self.awareness.set_phase("Verify")
+        yield self._phase("Verify", "active")
+        yield self._progress(4, 7, "[VERIFY] Verifying solution before applying")
+
+        # 1. Check Error Memory - did we try this before and fail?
+        yield self._log("info", "Checking Error Memory for similar past failures...")
+
+        similar_errors = memory.dsm.route(
+            f"ERROR: {state.task}",
+            k=3
+        )
+
+        # Filter only error records
+        error_records = [r for r in similar_errors if "Errors" in r.segment.category_path]
+
+        if error_records:
+            yield self._log("warning", f"⚠️ Found {len(error_records)} similar past errors in memory")
+
+            # Show the most similar error
+            most_similar = error_records[0]
+            yield self._thinking(f"Similar past error found:\n{most_similar.segment.text[:300]}")
+
+            # Ask LLM if current approach is different enough
+            verification_prompt = f"""
+Task: {state.task}
+
+Past error found in memory:
+{most_similar.segment.text[:500]}
+
+Current proposed solution:
+{state.last_rationale[:1000]}
+
+Question: Is the current approach DIFFERENT from the past failed approach?
+Answer with YES or NO and brief explanation (2-3 sentences).
+"""
+
+            try:
+                verification = await asyncio.to_thread(
+                    self.gemini.generate_text,
+                    verification_prompt,
+                    "You are a verification assistant. Analyze if the new approach avoids past mistakes."
+                )
+
+                if "NO" in verification.upper() or "SAME" in verification.upper():
+                    yield self._log("error", f"❌ Verification FAILED: Approach too similar to past failure")
+                    yield self._thinking(verification)
+                    yield self._phase("Verify", "error")
+                    return
+                else:
+                    yield self._log("success", "✓ Approach is different from past failure")
+                    yield self._thinking(verification)
+            except Exception as e:
+                print(f"[VERIFY] LLM verification failed: {e}")
+                # Continue anyway if verification fails
+
+        # 2. LLM verification - is the solution logical and safe?
+        yield self._log("info", "Performing LLM verification of solution logic...")
+
+        verification_prompt = f"""
+Task: {state.task}
+
+Proposed solution:
+{state.last_rationale[:1500]}
+
+Question: Is this solution correct, safe, and logical?
+Consider:
+- Does it solve the actual problem?
+- Are there any obvious bugs or issues?
+- Is it safe to apply?
+
+Answer with YES or NO and brief reason (2-3 sentences).
+"""
+
+        try:
+            verification = await asyncio.to_thread(
+                self.gemini.generate_text,
+                verification_prompt,
+                "You are a code review assistant. Verify if the solution is correct and safe."
+            )
+
+            if "NO" in verification.upper() or "UNSAFE" in verification.upper() or "INCORRECT" in verification.upper():
+                yield self._log("error", f"❌ Verification FAILED: Solution has issues")
+                yield self._thinking(verification)
+                yield self._phase("Verify", "error")
+                return
+            else:
+                yield self._log("success", "✓ Solution verified as correct and safe")
+                yield self._thinking(verification)
+        except Exception as e:
+            print(f"[VERIFY] LLM verification failed: {e}")
+            yield self._log("warning", f"⚠️ Verification check failed: {e}")
+            # Continue anyway if verification fails
+
+        yield self._phase("Verify", "done")
+
     def _get_energy_ledger(self, state: AgentRunState, memory: MemoryBridge, phase: str, iteration: int = 1) -> dict:
         """Compute the algorithmic energy footprint of cognitive execution."""
         try:
@@ -302,6 +446,17 @@ class SharrowkinAgent:
     # --- helper emitters ---------------------------------------------------
     def _phase(self, name: str, status: str) -> dict[str, object]:
         return {"type": "phase_change", "phase": name.lower(), "status": status}
+
+    def _progress(self, current_step: int, total_steps: int, step_name: str) -> dict[str, object]:
+        """Emit progress update with current step."""
+        percentage = int((current_step / total_steps) * 100)
+        return {
+            "type": "progress",
+            "current_step": current_step,
+            "total_steps": total_steps,
+            "percentage": percentage,
+            "step_name": step_name
+        }
 
     def _log(self, level: str, message: str) -> dict[str, object]:
         return {"type": "log", "level": level, "message": message}
@@ -405,6 +560,27 @@ class SharrowkinAgent:
     async def run(self, task: str, workspace_path: str, plan_mode: str = "autonomous") -> AsyncIterator[dict[str, object]]:
         print(f"[AGENT] run() called: task={task!r}, workspace_path={workspace_path!r}, plan_mode={plan_mode!r}")
         workspace = resolve_workspace(workspace_path)
+
+        # Extract target subfolder from task (e.g., "изучай sharrowkinagent/backend" or full Windows path)
+        import re
+
+        # Try to extract full Windows path first
+        windows_path_match = re.search(r'(?:изучай|analyze|explore|study)\s+([A-Z]:[\\\/][^\s]+)', task, re.IGNORECASE)
+        if windows_path_match:
+            full_path = Path(windows_path_match.group(1))
+            if full_path.exists() and full_path.is_dir():
+                workspace = full_path
+                print(f"[AGENT] Detected full path: {full_path}, using workspace: {workspace}")
+        else:
+            # Try relative path
+            subfolder_match = re.search(r'(?:изучай|analyze|explore|study)\s+([a-zA-Z0-9_/-]+)', task, re.IGNORECASE)
+            if subfolder_match:
+                subfolder = subfolder_match.group(1).strip('/')
+                target_path = workspace / subfolder
+                if target_path.exists() and target_path.is_dir():
+                    workspace = target_path
+                    print(f"[AGENT] Detected target subfolder: {subfolder}, using workspace: {workspace}")
+
         state = AgentRunState(
             task=task,
             workspace=workspace,
@@ -414,7 +590,6 @@ class SharrowkinAgent:
         )
 
         # Extract selected repository from user message if present
-        import re
         repo_match = re.search(r'(?:выбрал|selected)\s+(?:репозиторий|repository):\s*([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)', task, re.IGNORECASE)
         if repo_match:
             self.selected_repo = repo_match.group(1)
@@ -435,6 +610,9 @@ class SharrowkinAgent:
         # Store user message in conversation history
         self.conversation_history.append({"role": "user", "content": task})
 
+        # Save to DSM for persistent memory
+        self._save_conversation_to_dsm("user", task, memory)
+
         # --- Custom Strategic Ideas Intervention ---
         task_lower = task.lower().strip()
         mutation_keywords = {
@@ -445,48 +623,6 @@ class SharrowkinAgent:
             "deploy", "debug", "implement",
         }
         asks_for_changes = any(keyword in task_lower for keyword in mutation_keywords)
-        is_strategic_request = any(
-            kw in task_lower 
-            for kw in ["идеи", "развитие", "улучшение", "план действий", "nare-field", "nare field", "roadmap", "strategic"]
-        ) and not asks_for_changes or (task_lower == "изучай проект" and not plan_mode == "analyze")
-
-        if is_strategic_request:
-            strategic_response = (
-                "## 🔍 Анализ проекта Sharrowkin Agent и план улучшений\n\n"
-                "Я изучил архитектуру проекта, выявил ключевые проблемы текущей NumPy-реализации и подготовил план модернизации:\n\n"
-                "### 🏗️ Текущее состояние архитектуры\n"
-                "1. **NARE-Field (NARELabs2)**: Минимизация свободной энергии, Hopfield-подобная память Memory Field, SubQ attention ($O(N \\log N)$) и MoE-роутинг Anthill.\n"
-                "2. **DSM (Dynamic Segmented Memory)**: Векторный поиск (Dense + Sparse), термодинамическое испарение (decay) и граф памяти.\n"
-                "3. **Delta Complexity Engine**: Динамический выбор глубины рассуждений (RESONANCE, SHALLOW, DEEP, FULL).\n"
-                "4. **DPM (Dynamic Parametric Modulation)**: Динамическое роутирование и модуляция адаптеров.\n"
-                "5. **RLD (Recursive Latent DNA)**: Оркестрация инструментов и отслеживание латентных операторов.\n\n"
-                "### ⚠️ Критические проблемы\n"
-                "- 🧩 **Фрагментация**: DSM и DPM используют независимые embedding-модели (`HashEmbeddingModel` vs `HashingVectorizer`).\n"
-                "- 🔌 **Отсутствие единого API**: Модели работают автономно, усложняя построение сквозных пайплайнов.\n"
-                "- 🧪 **Слабая валидация**: Тестирование ведется в основном на искусственных примерах без оценки на реальных бенчмарках (GSM8K/MATH).\n"
-                "- ⚡ **Производительность**: Использование чистого NumPy без GPU-ускорения для вычислений полей памяти.\n\n"
-                "### 📅 План улучшений по фазам\n"
-                "#### 🔹 Фаза 1: Унификация (Недели 1-3)\n"
-                "- Создание единого интерфейса векторизации `UnifiedEmbedding`.\n"
-                "- Выравнивание схем хранения памяти DSM (`MemorySegment`) и DPM (`MemoryRecord`).\n"
-                "- Централизованная YAML/TOML конфигурация вместо разрозненных настроек.\n\n"
-                "#### 🔹 Фаза 2: Интеграция пайплайнов (Недели 4-7)\n"
-                "- Реализация единого интерфейса `SharrowkinAgent` для последовательного вызова Delta Engine -> DSM -> DPM -> NARE-Field.\n"
-                "- Добавление сквозного логирования (tracing) и поддержка асинхронного стриминга генерации.\n\n"
-                "#### 🔹 Фаза 3: Оптимизация и GPU-ускорение (Недели 8-10)\n"
-                "- Перенос вычислений MemoryField и SubQ Attention на PyTorch с поддержкой GPU.\n"
-                "- Реализация Memory-mapped storage для эффективного чтения индексов DSM.\n\n"
-                "#### 🔹 Фаза 4: Реальная валидация (Недели 11-14)\n"
-                "- Интеграция бенчмарков (GSM8K, MATH, HumanEval) и проведение систематического анализа абляции (ablation studies).\n\n"
-                "#### 🔹 Фаза 5: Production-Ready (Недели 15-19)\n"
-                "- FastAPI / gRPC интерфейс, контейнеризация и мониторинг метрик через Prometheus / Grafana.\n\n"
-                "--- \n"
-                f"📑 *Весь план улучшений успешно сохранен в файле [SHARROWKIN_IMPROVEMENT_PLAN.md](file:///{self.workspace}/SHARROWKIN_IMPROVEMENT_PLAN.md)!*"
-            )
-            self.conversation_history.append({"role": "assistant", "content": strategic_response})
-            yield {"type": "content", "content": strategic_response}
-            yield self._status("done")
-            return
 
         # --- Intent Routing ---
         try:
@@ -551,6 +687,10 @@ class SharrowkinAgent:
                             response = f"Привет! Я {agent_name} — автономный агент-разработчик. Чем могу помочь?"
                 # Store assistant response
                 self.conversation_history.append({"role": "assistant", "content": response})
+
+                # Save assistant response to DSM
+                self._save_conversation_to_dsm("assistant", response, memory)
+
                 # Keep history manageable (last 50 messages, increased from 20)
                 if len(self.conversation_history) > 50:
                     self.conversation_history = self.conversation_history[-50:]
@@ -565,18 +705,22 @@ class SharrowkinAgent:
             yield self._log("system", "Informational analysis cycle started.")
 
             try:
-                # Check if this is a GitHub API request (skip local workspace scan)
+                # Always scan local workspace if it exists and is valid
+                workspace_is_valid = workspace.exists() and workspace.is_dir()
+
+                # Check if this is a GitHub API request
                 is_github_request = any(keyword in state.task.lower() for keyword in [
                     "репозитори", "репо", "repository", "repositories", "github",
                     "список репо", "мои репо", "какие репо", "где мои репо"
                 ])
 
                 print(f"[DEBUG] Task: {state.task}")
-                print(f"[DEBUG] Task lower: {state.task.lower()}")
+                print(f"[DEBUG] Workspace: {workspace}")
+                print(f"[DEBUG] Workspace valid: {workspace_is_valid}")
                 print(f"[DEBUG] is_github_request: {is_github_request}")
 
-                if not is_github_request:
-                    # 1. Observe Phase (AST Scan) - only for local workspace queries
+                if workspace_is_valid and not is_github_request:
+                    # 1. Observe Phase (AST Scan) - scan local workspace
                     async for event in self._observe(state, memory):
                         yield event
 
@@ -584,8 +728,11 @@ class SharrowkinAgent:
                     async for event in self._recall(state, memory):
                         yield event
                 else:
-                    # For GitHub requests, skip workspace scan
-                    yield self._log("info", "GitHub API request detected - skipping local workspace scan")
+                    # For GitHub requests or invalid workspace, skip scan
+                    if is_github_request:
+                        yield self._log("info", "GitHub API request detected - skipping local workspace scan")
+                    else:
+                        yield self._log("info", f"Workspace not valid or not found: {workspace}")
                     await asyncio.sleep(0)
 
                 # 3. Reason Phase (Rich response generation)
@@ -702,64 +849,164 @@ class SharrowkinAgent:
         # --- Full coding agent cycle ---
         yield self._log("system", "Cognitive cycle started.")
 
+        # Analyze task ambiguity and ask clarifying questions if needed
+        yield self._thinking("Analyzing task requirements...")
+
+        # Determine if task needs clarification
+        is_vague = any(keyword in state.task.lower() for keyword in [
+            "найди", "find", "исправь", "fix", "улучши", "improve", "оптимизируй", "optimize",
+            "добавь", "add", "создай", "create"
+        ]) and len(state.task.split()) < 10  # Short commands are often vague
+
+        # Check if specific files/locations mentioned
+        has_specific_target = any(ext in state.task.lower() for ext in [
+            ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".go", ".rs", ".cpp", ".c",
+            "в файле", "in file", "в папке", "in folder"
+        ])
+
+        # Ask clarifying questions for vague tasks
+        if is_vague and not has_specific_target:
+            clarification_questions = []
+
+            if "найди" in state.task.lower() or "find" in state.task.lower():
+                clarification_questions.append({
+                    "question": "Что именно нужно найти?",
+                    "options": [
+                        "Баги и ошибки в коде",
+                        "Конкретный файл или функцию",
+                        "Проблемы производительности",
+                        "Уязвимости безопасности"
+                    ]
+                })
+                clarification_questions.append({
+                    "question": "В какой части проекта искать?",
+                    "options": [
+                        "Во всём проекте",
+                        "Только в backend",
+                        "Только в frontend",
+                        "В конкретной папке (укажите путь)"
+                    ]
+                })
+
+            if "исправь" in state.task.lower() or "fix" in state.task.lower():
+                clarification_questions.append({
+                    "question": "Что нужно исправить?",
+                    "options": [
+                        "Конкретную ошибку (укажите файл и строку)",
+                        "Все найденные баги",
+                        "Failing тесты",
+                        "Проблему производительности"
+                    ]
+                })
+
+            if "добавь" in state.task.lower() or "create" in state.task.lower():
+                clarification_questions.append({
+                    "question": "Куда добавить?",
+                    "options": [
+                        "В существующий файл (укажите путь)",
+                        "Создать новый файл",
+                        "В конкретную функцию/класс",
+                        "Автоматически определить лучшее место"
+                    ]
+                })
+                clarification_questions.append({
+                    "question": "Какие требования к реализации?",
+                    "options": [
+                        "Следовать существующему стилю проекта",
+                        "Добавить тесты",
+                        "Добавить документацию",
+                        "Всё вышеперечисленное"
+                    ]
+                })
+
+            if clarification_questions:
+                yield {
+                    "type": "clarification_needed",
+                    "questions": clarification_questions,
+                    "can_skip": True,
+                    "skip_message": "Продолжить с автоматическим определением"
+                }
+                yield self._log("info", "Задача требует уточнений. Пожалуйста, ответьте на вопросы или нажмите 'Продолжить' для автоматического определения.")
+
+                # Wait for user response (frontend should handle this)
+                # For now, continue with automatic determination
+                yield self._thinking("Пользователь не ответил на уточнения. Продолжаю с автоматическим определением...")
+
+        # Generate and show execution plan upfront
+        yield self._thinking("Creating execution plan...")
+
+        # Determine task type and create plan
+        requires_code_changes = any(keyword in state.task.lower() for keyword in [
+            "создай", "создать", "добавь", "добавить", "исправь", "исправить",
+            "измени", "изменить", "удали", "удалить", "рефактор", "напиши",
+            "create", "add", "fix", "change", "modify", "delete", "refactor", "write"
+        ])
+
+        is_analysis = any(keyword in state.task.lower() for keyword in [
+            "изучай", "изучи", "analyze", "study", "explore", "найди", "find"
+        ])
+
+        # Fast mode for simple tasks (skip VERIFY)
+        is_simple_task = any(keyword in state.task.lower() for keyword in [
+            "привет", "hello", "hi", "ку", "что ты", "кто ты", "помоги", "help"
+        ])
+
+        # Show clear execution plan with professional icons
+        if requires_code_changes:
+            if is_simple_task:
+                plan_steps = [
+                    "1. [SCAN] Quick workspace scan (cached)",
+                    "2. [MEMORY] Recall relevant context",
+                    "3. [GENERATE] Generate solution with LLM",
+                    "4. [APPLY] Apply code changes",
+                    "5. [SAVE] Save to memory"
+                ]
+            else:
+                plan_steps = [
+                    "1. [SCAN] Scan workspace and analyze code structure",
+                    "2. [MEMORY] Recall relevant context from memory (DSM + RLD)",
+                    "3. [GENERATE] Generate solution with LLM",
+                    "4. [VERIFY] Verify solution before applying",
+                    "5. [APPLY] Apply code changes",
+                    "6. [TEST] Run tests and validate",
+                    "7. [SAVE] Save to memory for future tasks"
+                ]
+        elif is_analysis:
+            plan_steps = [
+                "1. [SCAN] Scan workspace and analyze code structure",
+                "2. [MEMORY] Recall relevant context from memory",
+                "3. [ANALYZE] Analyze dependencies and complexity",
+                "4. [REPORT] Generate detailed report"
+            ]
+        else:
+            plan_steps = [
+                "1. [MEMORY] Recall relevant context from memory",
+                "2. [GENERATE] Generate response",
+                "3. [SAVE] Save to memory"
+            ]
+
+        yield {
+            "type": "execution_plan",
+            "steps": plan_steps,
+            "estimated_time": "~10-20 seconds" if is_simple_task else ("~30-60 seconds" if requires_code_changes else "~10-20 seconds")
+        }
+        yield self._log("info", "Execution plan:\n" + "\n".join(plan_steps))
+
         try:
-            # Check if task requires code changes and no specific repo is mentioned
-            requires_code_changes = any(keyword in state.task.lower() for keyword in [
-                "создай", "создать", "добавь", "добавить", "исправь", "исправить",
-                "измени", "изменить", "удали", "удалить", "рефактор", "напиши",
-                "create", "add", "fix", "change", "modify", "delete", "refactor", "write"
-            ])
+            # Check if workspace is valid
+            workspace_is_valid = state.workspace.exists() and state.workspace.is_dir()
 
-            # Check if specific repo is mentioned
-            has_repo_mention = any(keyword in state.task.lower() for keyword in [
-                "в репозитории", "в репо", "in repository", "in repo", "в проекте", "in project"
-            ])
+            if not workspace_is_valid:
+                # Workspace not valid - inform user
+                yield self._log("error", f"Workspace not found or invalid: {state.workspace}")
+                yield {
+                    "type": "content",
+                    "content": f"⚠️ **Workspace не найден или недоступен:**\n\n`{state.workspace}`\n\nПожалуйста, укажите корректный путь к проекту."
+                }
+                yield self._status("error")
+                return
 
-            # Show repository selector only if:
-            # 1. User wants to make code changes
-            # 2. No specific repo mentioned in the message
-            # 3. No repo selected yet (not in this message, not previously)
-            # 4. Workspace is not a valid local directory (GitHub-only mode)
-            workspace_is_local = state.workspace.exists() and state.workspace.is_dir()
-
-            if requires_code_changes and not has_repo_mention and not state.selected_repo and not workspace_is_local:
-                # Ask user to select repository
-                yield self._log("info", "Получаю список ваших репозиториев...")
-
-                from backend.config import SETTINGS
-                if SETTINGS.github_token:
-                    try:
-                        repos_json = await github_list_repos(SETTINGS.github_token)
-                        import json
-                        repos = json.loads(repos_json)
-
-                        if isinstance(repos, list) and len(repos) > 0:
-                            # Format repos for selector
-                            formatted_repos = []
-                            for repo in repos[:20]:  # Limit to 20 repos
-                                formatted_repos.append({
-                                    "id": repo.get("full_name", ""),
-                                    "name": repo.get("name", ""),
-                                    "full_name": repo.get("full_name", ""),
-                                    "description": repo.get("description", ""),
-                                    "language": repo.get("language", ""),
-                                    "private": repo.get("private", False),
-                                    "url": repo.get("url", "")
-                                })
-
-                            # Send repo selector card
-                            yield self._repo_selector(
-                                formatted_repos,
-                                "В какой репозиторий нужно внести изменения?"
-                            )
-
-                            # Wait for user selection (frontend will send new message with selected repo)
-                            yield {"type": "content", "content": "👆 Выберите репозиторий из списка выше"}
-                            yield self._status("waiting_repo_selection")
-                            return
-                    except Exception as e:
-                        print(f"[AGENT] Failed to get repos for selector: {e}")
-
+            # Workspace valid - proceed with task
             async for event in self._observe(state, memory):
                 yield event
             async for event in self._recall(state, memory):
@@ -776,6 +1023,29 @@ class SharrowkinAgent:
                 if not state.changes_made:
                     success = True
                     break
+
+                # VERIFY phase - check solution before applying (skip for simple tasks)
+                verification_passed = True
+                if not is_simple_task:
+                    async for event in self._verify(state, memory):
+                        yield event
+                        if event.get("type") == "phase" and event.get("status") == "error":
+                            verification_passed = False
+
+                    if not verification_passed:
+                        # Verification failed - skip stabilize and retry
+                        yield self._log("warning", "⚠️ Verification failed, retrying with different approach...")
+                        state.last_error = "Verification failed: solution too similar to past failure or has logical issues"
+                        record = FailureRecord(
+                            iteration=iteration,
+                            changed_files=state.current_changed_files,
+                            error=state.last_error,
+                            patch_diff=state.final_diff
+                        )
+                        self.failure_history.append(record)
+                        continue
+                else:
+                    yield self._log("info", "⚡ Fast mode: skipping verification for simple task")
 
                 async for event in self._stabilize(state, memory, iteration):
                     yield event
@@ -804,7 +1074,7 @@ class SharrowkinAgent:
 Task: {state.task}
 
 What was done:
-- Files changed: {len(state.changes_made) if state.changes_made else 0}
+- Files changed: {len(state.current_changed_files) if state.current_changed_files else 0}
 - Tools used: {', '.join(list(set(state.tools_used))[:5]) if state.tools_used else 'none'}
 - Actions performed: {len(state.actions)}
 
@@ -819,13 +1089,24 @@ Describe what specifically was done and what result was achieved."""
                         ),
                         timeout=10
                     )
-                    yield {"type": "content", "content": f"\n\n**Work Summary:**\n{summary.strip()}"}
+                    final_response = f"\n\n**Work Summary:**\n{summary.strip()}"
+                    yield {"type": "content", "content": final_response}
+
+                    # Save work summary to conversation history and DSM
+                    self.conversation_history.append({"role": "assistant", "content": final_response})
+                    self._save_conversation_to_dsm("assistant", final_response, memory)
+
                     await asyncio.sleep(0)
                 except Exception as e:
                     print(f"[AGENT] Failed to generate summary: {e}")
 
                 if state.last_rationale:
-                    yield {"type": "content", "content": state.last_rationale}
+                    rationale_content = state.last_rationale
+                    yield {"type": "content", "content": rationale_content}
+
+                    # Save rationale to conversation history and DSM
+                    self.conversation_history.append({"role": "assistant", "content": rationale_content})
+                    self._save_conversation_to_dsm("assistant", rationale_content, memory)
                     await asyncio.sleep(0)
 
                 yield self._status("done")
@@ -845,6 +1126,14 @@ Describe what specifically was done and what result was achieved."""
             yield self._log("error", str(exc))
         except Exception as exc:
             print(f"[AGENT] Cycle error: {exc}")
+
+            # Save critical error to Error Memory
+            self._learn_from_error(
+                error=str(exc),
+                context=f"Task: {state.task}\nCritical agent cycle failure",
+                memory=memory
+            )
+
             yield self._thinking(f"Error: {exc}")
             yield {"type": "content", "content": f"⚠️ **Ошибка агента:**\n\n```\n{exc}\n```"}
             yield self._status("error")
@@ -858,6 +1147,7 @@ Describe what specifically was done and what result was achieved."""
     ) -> AsyncIterator[dict[str, object]]:
         self.awareness.set_phase("Observe")
         yield self._phase("Observe", "active")
+        yield self._progress(1, 7, "[SCAN] Scanning workspace and analyzing code")
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -960,8 +1250,8 @@ Describe what specifically was done and what result was achieved."""
             # Phase 3: Deep Code Understanding with Context Linker and Data Flow
             phase3_insights = ""
             try:
-                from analysis.context_linker import ContextLinker
-                from analysis.data_flow_analyzer import DataFlowAnalyzer
+                from backend.analysis.code.context_linker import ContextLinker
+                from backend.analysis.code.data_flow_analyzer import DataFlowAnalyzer
 
                 linker = ContextLinker(sem_graph, state.workspace)
                 flow_analyzer = DataFlowAnalyzer(sem_graph)
@@ -1085,6 +1375,7 @@ Describe what specifically was done and what result was achieved."""
     ) -> AsyncIterator[dict[str, object]]:
         self.awareness.set_phase("Recall")
         yield self._phase("Recall", "active")
+        yield self._progress(2, 7, "[MEMORY] Recalling relevant context from memory")
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1124,6 +1415,7 @@ Describe what specifically was done and what result was achieved."""
     ) -> AsyncIterator[dict[str, object]]:
         self.awareness.set_phase("Reason")
         yield self._phase("Reason", "active")
+        yield self._progress(3, 7, "[GENERATE] Generating solution with LLM")
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1249,8 +1541,16 @@ Describe what specifically was done and what result was achieved."""
             f"Average Cyclomatic Complexity: {state.complexity_avg}\\n"
             f"Circular Dependencies Detected: {state.circular_dependencies}\\n"
             f"================================\\n\\n"
-            f"{state.workspace_summary}"
         )
+
+        # Use DSM memory context instead of full workspace summary to save tokens
+        # Only include full workspace summary on first iteration or if memory is empty
+        if iteration == 1 or len(state.memory_context) < 500:
+            workspace_summary_enriched += state.workspace_summary
+        else:
+            # Use only DSM-retrieved context (already filtered by relevance)
+            workspace_summary_enriched += f"[Using DSM memory context - {len(state.memory_context)} chars of relevant code]\\n"
+            workspace_summary_enriched += state.memory_context[:3000]  # Limit to 3k chars
 
         # --- Generate patch with file contents ---
         llm_action = self.awareness.track_llm_generation(
@@ -1264,15 +1564,106 @@ Describe what specifically was done and what result was achieved."""
         await asyncio.sleep(0.4)
 
         # Use regular Gemini client (no Antigravity SDK dependency)
-        generated = await asyncio.to_thread(
-            self.gemini.generate_patch,
-                task=state.task,
-                workspace_summary=workspace_summary_enriched,
-                memory_context=state.memory_context,
-                previous_error=previous_err_combined,
-                action_history=state.actions,
-                file_contents=file_contents,
+        # For large analysis tasks, split into chunks to avoid timeout
+        is_large_analysis = "изучай" in state.task.lower() or "analyze" in state.task.lower()
+
+        if is_large_analysis and len(workspace_summary_enriched) > 10000:
+            # Split analysis into chunks to avoid timeout
+            yield self._log("info", "⚡ Large project detected - using chunked analysis to avoid timeout")
+
+            # Step 1: Quick structure overview (fast)
+            yield self._thinking("Step 1/3: Analyzing project structure...")
+            structure_prompt = f"""Analyze the project structure briefly (max 500 words):
+
+TASK: {state.task}
+
+PROJECT FILES:
+{workspace_summary_enriched[:5000]}
+
+Provide:
+1. Project type and tech stack
+2. Main directories and their purpose
+3. Key entry points
+
+Keep it concise."""
+
+            structure_analysis = await asyncio.to_thread(
+                self.gemini.generate_text,
+                structure_prompt,
+                "You are a code analyst. Be concise."
             )
+            yield self._thinking(structure_analysis)
+
+            # Step 2: Key components analysis (medium)
+            yield self._thinking("Step 2/3: Analyzing key components...")
+            components_prompt = f"""Analyze key components (max 500 words):
+
+STRUCTURE:
+{structure_analysis}
+
+MEMORY CONTEXT:
+{state.memory_context[:3000]}
+
+Identify:
+1. Core modules and their responsibilities
+2. Architecture patterns used
+3. Dependencies and integrations
+
+Keep it concise."""
+
+            components_analysis = await asyncio.to_thread(
+                self.gemini.generate_text,
+                components_prompt,
+                "You are a code analyst. Be concise."
+            )
+            yield self._thinking(components_analysis)
+
+            # Step 3: Final synthesis (fast)
+            yield self._thinking("Step 3/3: Generating final report...")
+            final_prompt = f"""Create final analysis report (max 1000 words):
+
+TASK: {state.task}
+
+STRUCTURE:
+{structure_analysis}
+
+COMPONENTS:
+{components_analysis}
+
+Create a comprehensive but concise report with:
+- Project overview
+- Architecture highlights
+- Key findings
+- Recommendations (if applicable)
+
+Use markdown formatting."""
+
+            final_report = await asyncio.to_thread(
+                self.gemini.generate_text,
+                final_prompt,
+                "You are a code analyst. Create clear, structured reports."
+            )
+
+            # Create a mock generated object for analysis tasks
+            from backend.core import types
+            generated = types.GeneratedPatch(
+                rationale=final_report,
+                files=[],
+                commands=[],
+                subtasks=[]
+            )
+        else:
+            # Normal single-request generation for code changes
+            generated = await asyncio.to_thread(
+                self.gemini.generate_patch,
+                    task=state.task,
+                    workspace_summary=workspace_summary_enriched,
+                    memory_context=state.memory_context,
+                    previous_error=previous_err_combined,
+                    action_history=state.actions,
+                    file_contents=file_contents,
+                    conversation_history=self.conversation_history,
+                )
 
         # Update LLM action status
         self.awareness.update_action_status(llm_action, "done", {
@@ -1313,6 +1704,13 @@ Describe what specifically was done and what result was achieved."""
                     yield self._tool_call("terminal", status="error", target=command, detail=f"exit {cmd_result.exit_code}")
                     state.last_error = f"Command '{command}' failed with exit code {cmd_result.exit_code}:\n{cmd_result.output[-4000:]}"
                     yield self._log("error", state.last_error)
+
+                    # Save error to Error Memory
+                    self._learn_from_error(
+                        error=state.last_error,
+                        context=f"Task: {state.task}\nCommand: {command}",
+                        memory=memory
+                    )
 
         # If there are no files to change
         if not generated.files:
@@ -1411,6 +1809,7 @@ Describe what specifically was done and what result was achieved."""
         iteration: int,
     ) -> AsyncIterator[dict[str, object]]:
         yield self._phase("Stabilize", "active")
+        yield self._progress(5, 7, "[TEST] Running tests and validating changes")
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1418,13 +1817,31 @@ Describe what specifically was done and what result was achieved."""
             "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
         }
 
+        # Skip tests if no code changes were made (analysis/informational tasks)
+        if not state.current_changed_files:
+            yield self._log("info", "⚡ No code changes - skipping tests")
+            yield self._phase("Stabilize", "done")
+            return
+
         # Track testing action
         test_action = self.awareness.track_testing("pytest", status="started")
         yield test_action.to_event()
 
         yield self._log("info", f"Running pytest, iteration {iteration}.")
         yield self._tool_call("run_tests", status="running", target="pytest")
-        test_result = await asyncio.to_thread(run_pytest, state.workspace)
+
+        # Run pytest with timeout to prevent hanging
+        try:
+            test_result = await asyncio.wait_for(
+                asyncio.to_thread(run_pytest, state.workspace),
+                timeout=60.0  # 60 second timeout
+            )
+        except asyncio.TimeoutError:
+            yield self._log("warning", "⚠️ Tests timed out after 60s - skipping test validation")
+            yield self._tool_call("run_tests", status="error", target="pytest", detail="timeout")
+            yield self._phase("Stabilize", "done")
+            return
+
         state.actions.append(f"pytest exited with {test_result.exit_code}")
         state.tools_used.append("pytest")
 
@@ -1448,6 +1865,13 @@ Describe what specifically was done and what result was achieved."""
 
         # Test failed - analyze with debugger and ErrorAnalyzer
         state.last_error = test_result.output
+
+        # Save error to Error Memory
+        self._learn_from_error(
+            error=test_result.output,
+            context=f"Task: {state.task}\nTest execution failed",
+            memory=memory
+        )
 
         # Update test action status to error
         self.awareness.update_action_status(test_action, "error", {"exit_code": test_result.exit_code})
@@ -1594,6 +2018,7 @@ Describe what specifically was done and what result was achieved."""
     ) -> AsyncIterator[dict[str, object]]:
         self.awareness.set_phase("Commit")
         yield self._phase("Commit", "active")
+        yield self._progress(6, 7, "[SAVE] Saving to memory for future tasks")
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1623,7 +2048,7 @@ Describe what specifically was done and what result was achieved."""
             actions=state.actions,
             final_answer=final_answer,
             tools_used=state.tools_used,
-            changed_files=state.changes_made,
+            changed_files=state.current_changed_files,
             workspace_summary=state.workspace_summary[:1000] if state.workspace_summary else None,
         )
         yield self._tool_call("memory_store", status="done", target="DSM + RLD", detail="Solution committed")

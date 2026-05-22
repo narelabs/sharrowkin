@@ -411,6 +411,7 @@ class GeminiClient:
         previous_error: str = "",
         action_history: list[str] = None,
         file_contents: dict[str, str] = None,
+        conversation_history: list[dict] = None,
     ) -> GeneratedPatch:
         if not self.api_key and not self.omniroute_base_url:
             raise GeminiConfigurationError(
@@ -419,7 +420,17 @@ class GeminiClient:
             )
 
         prompt = self._build_prompt(task, workspace_summary, memory_context, previous_error, action_history, file_contents)
-        
+
+        # Build messages array with conversation history
+        messages = []
+        if conversation_history:
+            # Add previous conversation turns (limit to last 10 to avoid token overflow)
+            for msg in conversation_history[-10:]:
+                messages.append({"role": msg["role"], "content": msg["content"]})
+
+        # Add current prompt as final user message
+        messages.append({"role": "user", "content": prompt})
+
         # If Omniroute proxy is configured, route via Anthropic Messages API
         if self.omniroute_base_url:
             base_url = self.omniroute_base_url.rstrip("/")
@@ -434,9 +445,7 @@ class GeminiClient:
                 "model": self.omniroute_model,
                 "max_tokens": 8192,
                 "system": system_prompt,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
+                "messages": messages,
                 "temperature": 0.2,
                 "stream": False,  # Explicitly request non-streaming response
             }

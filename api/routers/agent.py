@@ -97,6 +97,7 @@ async def agent_websocket(websocket: WebSocket):
         async for event in agent.run(task, workspace_path):
             try:
                 await websocket.send_json(event)
+                await asyncio.sleep(0)  # Force immediate flush
             except Exception as e:
                 print(f"[WebSocket] Error sending event: {e}")
                 break

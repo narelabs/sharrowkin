@@ -828,11 +828,12 @@ class SharrowkinAgent:
         # Cache miss - perform full scan
         yield self._log("info", f"Scanning workspace: {state.workspace}")
         yield self._tool_call("scan_workspace", status="running", target=str(state.workspace))
-        await asyncio.sleep(0.3)  # Small delay to show tool is working
+        await asyncio.sleep(0.1)
+        yield self._log("info", "Reading files...")
         summaries = await asyncio.to_thread(scan_workspace, state.workspace)
         total_lines = sum(summary.line_count for summary in summaries)
         state.workspace_summary = summarize_workspace(summaries)
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.1)
         yield self._tool_call("scan_workspace", status="done", target=str(state.workspace), detail=f"{len(summaries)} files, {total_lines} lines")
         state.actions.append(f"Scanned {len(summaries)} source files with AST summaries")
         state.tools_used.append("pathlib")
@@ -841,14 +842,18 @@ class SharrowkinAgent:
         # Build Semantic Graph and Analyze Dependencies
         try:
             yield self._tool_call("analyze_dependencies", status="running", target=str(state.workspace))
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.1)
+            yield self._log("info", "Building dependency graph...")
             dep_analyzer = DependencyAnalyzer()
             await asyncio.to_thread(dep_analyzer.analyze_directory, state.workspace)
             dep_graph = dep_analyzer.get_graph()
 
+            yield self._log("info", "Building semantic graph...")
             sem_graph = SemanticGraph(state.workspace / ".sharrowkin" / "semantic_graph")
             sem_builder = SemanticGraphBuilder(sem_graph)
             await asyncio.to_thread(sem_builder.build_from_directory, state.workspace)
+            await asyncio.sleep(0.1)
+            yield self._log("info", "Saving semantic graph to DSM...")
             await asyncio.to_thread(sem_graph.save_to_dsm)
 
             metrics = sem_graph.calculate_complexity_metrics()

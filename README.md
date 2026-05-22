@@ -137,7 +137,7 @@ Backend runs at `http://127.0.0.1:8000`
 ### Frontend Setup
 
 ```bash
-cd frontend
+cd ui
 npm install
 npm run dev
 ```

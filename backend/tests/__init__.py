@@ -1,1 +1,0 @@
-"""Sharrowkin test suite."""

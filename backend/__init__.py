@@ -1,1 +1,0 @@
-"""Sharrowkin backend package."""

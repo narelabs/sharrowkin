@@ -81,9 +81,14 @@ async def agent_websocket(websocket: WebSocket):
         # Create memory bridge
         memory = MemoryBridge(workspace)
 
-        # Create agent
-        agent = SharrowkinAgent()
-        _active_agents[session_id] = agent
+        # Reuse existing agent or create new one
+        if session_id in _active_agents:
+            agent = _active_agents[session_id]
+            print(f"[WebSocket] Reusing existing agent for session: {session_id}")
+        else:
+            agent = SharrowkinAgent()
+            _active_agents[session_id] = agent
+            print(f"[WebSocket] Created new agent for session: {session_id}")
 
         # Send start event
         await websocket.send_json({

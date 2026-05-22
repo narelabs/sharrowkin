@@ -94,7 +94,7 @@ async def agent_websocket(websocket: WebSocket):
         })
 
         # Run agent and stream events
-        async for event in agent.run(task):
+        async for event in agent.run(task, workspace_path):
             try:
                 await websocket.send_json(event)
             except Exception as e:

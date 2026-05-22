@@ -118,7 +118,7 @@ sharrowkin/
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/sharrowkin.git
+git clone https://github.com/narelabs/sharrowkin.git
 cd sharrowkin
 
 # Create virtual environment

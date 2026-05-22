@@ -162,6 +162,8 @@ class MemoryBridge:
         actions: list[str],
         final_answer: str,
         tools_used: list[str],
+        changed_files: list[str] | None = None,
+        workspace_summary: str | None = None,
     ) -> None:
         # Encode task for trace indexing
         embedding = [0.0] * 128
@@ -216,11 +218,31 @@ class MemoryBridge:
             metadata={"workspace": str(self.workspace)},
         )
         self.rld.save()
+
+        # Enhanced DSM storage with more context
+        dsm_content = f"""Task: {task}
+
+Result: {final_answer}
+
+Files changed: {', '.join(changed_files) if changed_files else 'none'}
+
+Actions taken:
+{chr(10).join(f'- {action}' for action in actions[:10]) if actions else 'none'}
+
+Tools used: {', '.join(set(tools_used)) if tools_used else 'none'}"""
+
+        if workspace_summary:
+            dsm_content += f"\n\nProject context:\n{workspace_summary[:500]}"
+
         self.dsm.update_from_interaction(
             task,
-            final_answer,
+            dsm_content,
             importance=0.8,
-            metadata={"source": "sharrowkin_success"},
+            metadata={
+                "source": "sharrowkin_success",
+                "changed_files": changed_files or [],
+                "tools_used": tools_used,
+            },
         )
         self.dsm.save()
         if len(self.rld.trajectories) > 0 and len(self.rld.trajectories) % 5 == 0:

@@ -697,10 +697,7 @@ class SharrowkinAgent:
             # 1. User wants to make code changes
             # 2. No specific repo mentioned in the message
             # 3. No repo selected yet (not in this message, not previously)
-            # 4. Workspace is not a valid local directory (GitHub-only mode)
-            workspace_is_local = state.workspace.exists() and state.workspace.is_dir()
-
-            if requires_code_changes and not has_repo_mention and not state.selected_repo and not workspace_is_local:
+            if requires_code_changes and not has_repo_mention and not state.selected_repo:
                 # Ask user to select repository
                 yield self._log("info", "Получаю список ваших репозиториев...")
 
@@ -769,44 +766,10 @@ class SharrowkinAgent:
             if success:
                 async for event in self._commit(state, memory):
                     yield event
-
-                # Generate summary using LLM
-                yield self._log("info", "Generating work summary...")
-                await asyncio.sleep(0)
-
-                summary_prompt = f"""Write a brief summary of the completed work (2-3 sentences).
-
-Task: {state.task}
-
-What was done:
-- Files changed: {len(state.changes_made) if state.changes_made else 0}
-- Tools used: {', '.join(list(set(state.tools_used))[:5]) if state.tools_used else 'none'}
-- Actions performed: {len(state.actions)}
-
-Describe what specifically was done and what result was achieved."""
-
-                try:
-                    summary = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            self.gemini.generate_text,
-                            summary_prompt,
-                            "You are an assistant that writes brief summaries of completed work."
-                        ),
-                        timeout=10
-                    )
-                    yield {"type": "content", "content": f"\n\n**Work Summary:**\n{summary.strip()}"}
-                    await asyncio.sleep(0)
-                except Exception as e:
-                    print(f"[AGENT] Failed to generate summary: {e}")
-
                 if state.last_rationale:
                     yield {"type": "content", "content": state.last_rationale}
-                    await asyncio.sleep(0)
-
                 yield self._status("done")
-                await asyncio.sleep(0)
                 yield self._log("success", "Task stabilized and stored in local memory.")
-                await asyncio.sleep(0)
             else:
                 if state.last_error:
                     yield {"type": "content", "content": f"⚠️ **Self-healing loop reached the iteration limit.**\n\nLast error:\n```log\n{state.last_error}\n```"}
@@ -864,16 +827,13 @@ Describe what specifically was done and what result was achieved."""
 
         # Cache miss - perform full scan
         yield self._log("info", f"Scanning workspace: {state.workspace}")
-        await asyncio.sleep(0)
         yield self._tool_call("scan_workspace", status="running", target=str(state.workspace))
-        await asyncio.sleep(0)
-        yield self._log("info", "Reading files...")
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.3)  # Small delay to show tool is working
         summaries = await asyncio.to_thread(scan_workspace, state.workspace)
         total_lines = sum(summary.line_count for summary in summaries)
         state.workspace_summary = summarize_workspace(summaries)
+        await asyncio.sleep(0.2)
         yield self._tool_call("scan_workspace", status="done", target=str(state.workspace), detail=f"{len(summaries)} files, {total_lines} lines")
-        await asyncio.sleep(0)
         state.actions.append(f"Scanned {len(summaries)} source files with AST summaries")
         state.tools_used.append("pathlib")
         state.tools_used.append("ast")
@@ -881,20 +841,14 @@ Describe what specifically was done and what result was achieved."""
         # Build Semantic Graph and Analyze Dependencies
         try:
             yield self._tool_call("analyze_dependencies", status="running", target=str(state.workspace))
-            await asyncio.sleep(0)
-            yield self._log("info", "Building dependency graph...")
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.3)
             dep_analyzer = DependencyAnalyzer()
             await asyncio.to_thread(dep_analyzer.analyze_directory, state.workspace)
             dep_graph = dep_analyzer.get_graph()
 
-            yield self._log("info", "Building semantic graph...")
-            await asyncio.sleep(0)
             sem_graph = SemanticGraph(state.workspace / ".sharrowkin" / "semantic_graph")
             sem_builder = SemanticGraphBuilder(sem_graph)
             await asyncio.to_thread(sem_builder.build_from_directory, state.workspace)
-            yield self._log("info", "Saving semantic graph to DSM...")
-            await asyncio.sleep(0)
             await asyncio.to_thread(sem_graph.save_to_dsm)
 
             metrics = sem_graph.calculate_complexity_metrics()

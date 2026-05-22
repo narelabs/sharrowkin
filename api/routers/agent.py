@@ -81,14 +81,9 @@ async def agent_websocket(websocket: WebSocket):
         # Create memory bridge
         memory = MemoryBridge(workspace)
 
-        # Reuse existing agent or create new one
-        if session_id in _active_agents:
-            agent = _active_agents[session_id]
-            print(f"[WebSocket] Reusing existing agent for session: {session_id}")
-        else:
-            agent = SharrowkinAgent()
-            _active_agents[session_id] = agent
-            print(f"[WebSocket] Created new agent for session: {session_id}")
+        # Create agent
+        agent = SharrowkinAgent(workspace=workspace, memory=memory)
+        _active_agents[session_id] = agent
 
         # Send start event
         await websocket.send_json({
@@ -99,10 +94,9 @@ async def agent_websocket(websocket: WebSocket):
         })
 
         # Run agent and stream events
-        async for event in agent.run(task, workspace_path):
+        async for event in agent.run(task):
             try:
                 await websocket.send_json(event)
-                await asyncio.sleep(0)  # Force immediate flush
             except Exception as e:
                 print(f"[WebSocket] Error sending event: {e}")
                 break

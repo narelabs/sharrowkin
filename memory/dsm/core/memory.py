@@ -11,7 +11,10 @@ from ..storage.document import chunk_text, split_document
 from ..indexing.embedding import EmbeddingModel, HashEmbeddingModel, cosine, normalize, top_terms
 from ..retrieval.graph import MemoryGraph
 from ..indexing.index import SegmentIndex
-from ...optimized.cached_embedding import CachedEmbeddingModel
+try:
+    from memory.optimized.cached_embedding import CachedEmbeddingModel
+except ImportError:
+    CachedEmbeddingModel = None
 from .models import (
     ActiveContext,
     ConflictRecord,

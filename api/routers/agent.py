@@ -82,7 +82,7 @@ async def agent_websocket(websocket: WebSocket):
         memory = MemoryBridge(workspace)
 
         # Create agent
-        agent = SharrowkinAgent(workspace=workspace, memory=memory)
+        agent = SharrowkinAgent()
         _active_agents[session_id] = agent
 
         # Send start event

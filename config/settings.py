@@ -33,6 +33,8 @@ class AgentConfig(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    github_token: str | None = None
+    workspace_path: str | None = None
 
 
 def load_config(workspace_path: str | Path | None = None) -> AgentConfig:
@@ -67,3 +69,4 @@ def load_config(workspace_path: str | Path | None = None) -> AgentConfig:
 
 # Global config instance that can be imported directly
 global_config = load_config()
+SETTINGS = global_config  # Alias for backward compatibility

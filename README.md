@@ -118,7 +118,7 @@ sharrowkin/
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/sharrowkin.git
+git clone https://github.com/narelabs/sharrowkin.git
 cd sharrowkin
 
 # Create virtual environment
@@ -141,7 +141,7 @@ Backend runs at `http://127.0.0.1:8000`
 ### Frontend Setup
 
 ```bash
-cd frontend
+cd ui
 npm install
 npm run dev
 ```

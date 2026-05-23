@@ -8,6 +8,7 @@ from backend.memory.dsm.indexing.embedding import EmbeddingModel, HashEmbeddingM
 from backend.memory.dsm.core.memory import DynamicSegmentedMemory
 from backend.memory.dsm.core.models import RouteResult
 from backend.memory.dsm.storage.storage import JsonStorage
+from backend.memory.rld.sqlite_store import RldSqliteStore
 
 import os
 
@@ -217,7 +218,8 @@ class RecursiveLatentDNA:
         self.gene_extractor = gene_extractor or TrajectoryGeneExtractor(
             self.latent_encoder, self.embedding_model
         )
-        self.storage = JsonStorage(storage_path or Path(".rld") / "genes.json")
+        db_path = Path(str(storage_path).replace(".json", ".db")) if storage_path else Path(".rld") / "genes.db"
+        self.storage = RldSqliteStore(db_path)
         self.dsm_memory = dsm_memory or DynamicSegmentedMemory(
             self.storage.path.with_name("rld_dsm_memory.json"),
             embedding_model=self.embedding_model,

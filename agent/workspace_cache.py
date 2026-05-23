@@ -102,9 +102,9 @@ class WorkspaceCache:
 
     def clear(self) -> None:
         """Clear all cached entries."""
+        self.stats["invalidations"] += len(self.cache)
         self.cache.clear()
         self.access_order.clear()
-        self.stats["invalidations"] += len(self.cache)
 
     def get_stats(self) -> dict[str, Any]:
         """Get cache statistics."""

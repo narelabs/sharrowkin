@@ -57,7 +57,7 @@ class MemoryField:
             "Recall -> Reason": 0.75,
             "Reason -> Stabilize": 0.65,
             "Stabilize -> Commit": 0.80,
-            "Stabilize -> Reason (Self-Healing)": 0.30
+            "Stabilize -> Reason (Self-Healing)": 0.70  # Increased from 0.30 to 0.70
         }
         self.save()
 

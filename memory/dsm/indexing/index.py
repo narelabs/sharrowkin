@@ -1,77 +1,99 @@
 from __future__ import annotations
 
 from typing import Any
+import uuid
+
+from qdrant_client.http.models import Distance, VectorParams, PointStruct
 
 from .embedding import cosine
 from ..core.models import MemorySegment
+from ...db_config import get_qdrant_client
+from pathlib import Path
+import os
 
 
 class SegmentIndex:
-    """Fast segment index with FAISS/HNSW when available and exact fallback."""
+    """Fast segment index backed by Qdrant vector database."""
 
-    def __init__(self, backend: str = "auto") -> None:
+    def __init__(self, backend: str = "qdrant") -> None:
         self.backend = backend
-        self._ids: list[str] = []
-        self._vectors: list[list[float]] = []
-        self._faiss: Any = None
-        self._faiss_index: Any = None
+        self.collection_name = "dsm_segments"
+        
+        # Determine workspace path (hacky but works since we know it runs from workspace)
+        # Ideally passed in, but we fallback to CWD
+        workspace = Path(os.environ.get("WORKSPACE_PATH", os.getcwd()))
+        
+        self.client = get_qdrant_client(workspace)
         self._dim = 0
+        self._size = 0
+        self._initialized = False
+
+    def _ensure_collection(self, dim: int):
+        if self._initialized and self._dim == dim:
+            return
+            
+        if not self.client.collection_exists(self.collection_name):
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+            )
+        self._dim = dim
+        self._initialized = True
 
     def rebuild(self, segments: dict[str, MemorySegment]) -> None:
-        self._ids = []
-        self._vectors = []
+        """Rebuild the Qdrant index with the current segments."""
+        if not segments:
+            self._size = 0
+            return
+            
+        # Get dim from first segment
+        first_emb = next(iter(segments.values())).embedding
+        self._ensure_collection(len(first_emb))
+        
+        points = []
         for segment_id, segment in segments.items():
-            self._ids.append(segment_id)
-            self._vectors.append(segment.embedding)
-        self._dim = len(self._vectors[0]) if self._vectors else 0
-        self._build_faiss()
+            # Qdrant requires UUIDs or integers. We'll use uuid.uuid5 to generate stable UUIDs from segment_id
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_OID, segment_id))
+            points.append(
+                PointStruct(
+                    id=point_id,
+                    vector=segment.embedding,
+                    payload={"segment_id": segment_id}
+                )
+            )
+            
+        if points:
+            # Overwrite collection
+            self.client.recreate_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(size=self._dim, distance=Distance.COSINE)
+            )
+            
+            # Batch upload
+            batch_size = 100
+            for i in range(0, len(points), batch_size):
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=points[i:i + batch_size]
+                )
+        self._size = len(points)
 
     def search(self, query_embedding: list[float], k: int) -> list[tuple[str, float]]:
-        if self._faiss_index is not None and self._faiss is not None and self._ids:
-            import numpy as np
-
-            query = np.array([query_embedding], dtype="float32")
-            self._faiss.normalize_L2(query)
-            scores, indices = self._faiss_index.search(query, max(0, min(k, len(self._ids))))
-            out: list[tuple[str, float]] = []
-            for score, idx in zip(scores[0], indices[0]):
-                if idx >= 0:
-                    out.append((self._ids[int(idx)], float(score)))
-            return out
-
-        scored = [
-            (segment_id, cosine(query_embedding, embedding))
-            for segment_id, embedding in zip(self._ids, self._vectors)
-        ]
-        scored.sort(reverse=True, key=lambda item: item[1])
-        return scored[: max(0, k)]
+        if not self._initialized or self._size == 0:
+            return []
+            
+        search_result = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_embedding,
+            limit=max(0, k)
+        )
+        
+        return [(hit.payload["segment_id"], hit.score) for hit in search_result.points]
 
     @property
     def size(self) -> int:
-        return len(self._ids)
+        return self._size
 
     @property
     def backend_name(self) -> str:
-        return "faiss_hnsw" if self._faiss_index is not None else "exact"
-
-    def _build_faiss(self) -> None:
-        self._faiss = None
-        self._faiss_index = None
-        if self.backend == "exact" or not self._vectors or self._dim == 0:
-            return
-        try:
-            import faiss
-            import numpy as np
-        except ImportError:
-            if self.backend == "faiss":
-                raise
-            return
-
-        vectors = np.array(self._vectors, dtype="float32")
-        faiss.normalize_L2(vectors)
-        index = faiss.IndexHNSWFlat(self._dim, 32, faiss.METRIC_INNER_PRODUCT)
-        index.hnsw.efConstruction = 64
-        index.hnsw.efSearch = 64
-        index.add(vectors)
-        self._faiss = faiss
-        self._faiss_index = index
+        return "qdrant"

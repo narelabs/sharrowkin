@@ -27,6 +27,13 @@ if str(REPO_ROOT) not in sys.path:
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+# Create a dummy backend module so absolute imports from 'backend' work
+import types
+if 'backend' not in sys.modules:
+    backend_pkg = types.ModuleType('backend')
+    backend_pkg.__path__ = [str(BACKEND_DIR)]
+    sys.modules['backend'] = backend_pkg
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

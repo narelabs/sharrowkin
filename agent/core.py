@@ -7,7 +7,11 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 import math
+import time
+from typing import Any
+import os
 
+from monitoring.telemetry import get_tracer
 from backend.core.llm.client import AUTONOMOUS_AGENT_POLICY, GeminiClient, GeminiConfigurationError
 from backend.core import types
 from backend.memory import MemoryBridge
@@ -37,6 +41,7 @@ from backend.analysis.code.dependency import DependencyAnalyzer
 from backend.analysis.code.semantic_graph import SemanticGraph, SemanticGraphBuilder
 from backend.config.settings import AgentConfig, load_config
 from backend.agent.workspace_cache import WorkspaceCache, CachedWorkspace
+from backend.agent.failure_analyzer import FailureAnalyzer, FailureContext
 
 PHASES = ["Observe", "Recall", "Reason", "Stabilize", "Commit"]
 
@@ -211,6 +216,8 @@ class SharrowkinAgent:
         self.selected_repo: str = ""  # Persistent selected repository across requests
         self.workspace_cache = WorkspaceCache(ttl_seconds=3600, max_entries=10)  # Cache workspace scans
         self.failure_history: list[FailureRecord] = []
+        self.failure_analyzer = FailureAnalyzer()  # NEW: Analyze failures for learning
+        self._tracer = get_tracer()
 
     def _get_energy_ledger(self, state: AgentRunState, memory: MemoryBridge, phase: str, iteration: int = 1) -> dict:
         """Compute the algorithmic energy footprint of cognitive execution."""
@@ -387,406 +394,428 @@ class SharrowkinAgent:
 
     # --- main run loop ------------------------------------------------------
     async def run(self, task: str, workspace_path: str, plan_mode: str = "autonomous") -> AsyncIterator[dict[str, object]]:
-        print(f"[AGENT] run() called: task={task!r}, workspace_path={workspace_path!r}, plan_mode={plan_mode!r}")
-        workspace = resolve_workspace(workspace_path)
-        state = AgentRunState(
-            task=task,
-            workspace=workspace,
-            states=[],
-            actions=[],
-            tools_used=[],
-        )
+        with self._tracer.start_as_current_span("agent_run") as span:
+            span.set_attribute("task", task)
+            span.set_attribute("workspace", workspace_path)
 
-        # Extract selected repository from user message if present
-        import re
-        repo_match = re.search(r'(?:выбрал|selected)\s+(?:репозиторий|repository):\s*([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)', task, re.IGNORECASE)
-        if repo_match:
-            self.selected_repo = repo_match.group(1)
-            state.selected_repo = self.selected_repo
-            print(f"[AGENT] Extracted and saved selected repository: {self.selected_repo}")
-        elif self.selected_repo:
-            # Use previously selected repository
-            state.selected_repo = self.selected_repo
-            print(f"[AGENT] Using previously selected repository: {self.selected_repo}")
-        else:
-            print(f"[AGENT] No repository selected yet")
-
-        self.active_memory = MemoryBridge(workspace, config=self.config)
-        self.failure_history = []
-        memory = self.active_memory
-        yield self._status("running")
-
-        # Store user message in conversation history
-        self.conversation_history.append({"role": "user", "content": task})
-
-        # --- Custom Strategic Ideas Intervention ---
-        task_lower = task.lower().strip()
-        mutation_keywords = {
-            "создай", "напиши", "исправь", "добавь", "добавлю", "удали", "измени",
-            "сделай", "запусти", "установи", "обнови", "рефактор", "улучши", "улучшу",
-            "create", "write", "fix", "add", "delete", "remove", "change",
-            "make", "run", "install", "update", "refactor", "build", "test",
-            "deploy", "debug", "implement",
-        }
-        asks_for_changes = any(keyword in task_lower for keyword in mutation_keywords)
-        is_strategic_request = any(
-            kw in task_lower 
-            for kw in ["идеи", "развитие", "улучшение", "план действий", "nare-field", "nare field", "roadmap", "strategic"]
-        ) and not asks_for_changes or (task_lower == "изучай проект" and not plan_mode == "analyze")
-
-        if is_strategic_request:
-            strategic_response = (
-                "## 🔍 Анализ проекта Sharrowkin Agent и план улучшений\n\n"
-                "Я изучил архитектуру проекта, выявил ключевые проблемы текущей NumPy-реализации и подготовил план модернизации:\n\n"
-                "### 🏗️ Текущее состояние архитектуры\n"
-                "1. **NARE-Field (NARELabs2)**: Минимизация свободной энергии, Hopfield-подобная память Memory Field, SubQ attention ($O(N \\log N)$) и MoE-роутинг Anthill.\n"
-                "2. **DSM (Dynamic Segmented Memory)**: Векторный поиск (Dense + Sparse), термодинамическое испарение (decay) и граф памяти.\n"
-                "3. **Delta Complexity Engine**: Динамический выбор глубины рассуждений (RESONANCE, SHALLOW, DEEP, FULL).\n"
-                "4. **DPM (Dynamic Parametric Modulation)**: Динамическое роутирование и модуляция адаптеров.\n"
-                "5. **RLD (Recursive Latent DNA)**: Оркестрация инструментов и отслеживание латентных операторов.\n\n"
-                "### ⚠️ Критические проблемы\n"
-                "- 🧩 **Фрагментация**: DSM и DPM используют независимые embedding-модели (`HashEmbeddingModel` vs `HashingVectorizer`).\n"
-                "- 🔌 **Отсутствие единого API**: Модели работают автономно, усложняя построение сквозных пайплайнов.\n"
-                "- 🧪 **Слабая валидация**: Тестирование ведется в основном на искусственных примерах без оценки на реальных бенчмарках (GSM8K/MATH).\n"
-                "- ⚡ **Производительность**: Использование чистого NumPy без GPU-ускорения для вычислений полей памяти.\n\n"
-                "### 📅 План улучшений по фазам\n"
-                "#### 🔹 Фаза 1: Унификация (Недели 1-3)\n"
-                "- Создание единого интерфейса векторизации `UnifiedEmbedding`.\n"
-                "- Выравнивание схем хранения памяти DSM (`MemorySegment`) и DPM (`MemoryRecord`).\n"
-                "- Централизованная YAML/TOML конфигурация вместо разрозненных настроек.\n\n"
-                "#### 🔹 Фаза 2: Интеграция пайплайнов (Недели 4-7)\n"
-                "- Реализация единого интерфейса `SharrowkinAgent` для последовательного вызова Delta Engine -> DSM -> DPM -> NARE-Field.\n"
-                "- Добавление сквозного логирования (tracing) и поддержка асинхронного стриминга генерации.\n\n"
-                "#### 🔹 Фаза 3: Оптимизация и GPU-ускорение (Недели 8-10)\n"
-                "- Перенос вычислений MemoryField и SubQ Attention на PyTorch с поддержкой GPU.\n"
-                "- Реализация Memory-mapped storage для эффективного чтения индексов DSM.\n\n"
-                "#### 🔹 Фаза 4: Реальная валидация (Недели 11-14)\n"
-                "- Интеграция бенчмарков (GSM8K, MATH, HumanEval) и проведение систематического анализа абляции (ablation studies).\n\n"
-                "#### 🔹 Фаза 5: Production-Ready (Недели 15-19)\n"
-                "- FastAPI / gRPC интерфейс, контейнеризация и мониторинг метрик через Prometheus / Grafana.\n\n"
-                "--- \n"
-                f"📑 *Весь план улучшений успешно сохранен в файле [SHARROWKIN_IMPROVEMENT_PLAN.md](file:///{self.workspace}/SHARROWKIN_IMPROVEMENT_PLAN.md)!*"
+            print(f"[AGENT] run() called: task={task!r}, workspace_path={workspace_path!r}, plan_mode={plan_mode!r}")
+            workspace = resolve_workspace(workspace_path)
+            state = AgentRunState(
+                task=task,
+                workspace=workspace,
+                states=[],
+                actions=[],
+                tools_used=[],
             )
-            self.conversation_history.append({"role": "assistant", "content": strategic_response})
-            yield {"type": "content", "content": strategic_response}
-            yield self._status("done")
-            return
 
-        # --- Intent Routing ---
-        try:
-            if plan_mode == "analyze":
-                intent = {"is_informational": True, "is_conversational": False}
-                print(f"[AGENT] Overriding intent to informational for plan_mode=analyze")
+            # Extract selected repository from user message if present
+            import re
+            repo_match = re.search(r'(?:выбрал|selected)\s+(?:репозиторий|repository):\s*([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)', task, re.IGNORECASE)
+            if repo_match:
+                self.selected_repo = repo_match.group(1)
+                state.selected_repo = self.selected_repo
+                print(f"[AGENT] Extracted and saved selected repository: {self.selected_repo}")
+            elif self.selected_repo:
+                # Use previously selected repository
+                state.selected_repo = self.selected_repo
+                print(f"[AGENT] Using previously selected repository: {self.selected_repo}")
             else:
-                intent = await asyncio.to_thread(self.gemini.classify_intent, task)
-            print(f"[AGENT] Intent result: {intent}")
-            if intent.get("is_conversational"):
-                response = intent.get("response")
-                if not response:
-                    if not self.gemini.configured:
-                        # Get agent name from persona
-                        from personas import get_agent_name
-                        agent_name = get_agent_name()
-                        response = f"Привет! Я {agent_name} — автономный агент-разработчик. Чем могу помочь?"
-                    else:
-                        try:
-                            # Build conversation context for LLM
-                            history_text = self._format_history()
-                            prompt = f"{history_text}\n\nUser: {task}" if history_text else task
-                            # Inject persona into system instruction - persona REPLACES base instruction
-                            base_instruction = (
-                                f"{AUTONOMOUS_AGENT_POLICY}\n\n"
-                            )
+                print(f"[AGENT] No repository selected yet")
 
-                            # Add selected repository context if available
-                            if state.selected_repo:
-                                base_instruction += (
-                                    f"\n\nCURRENT REPOSITORY: {state.selected_repo}\n"
-                                    f"The user has selected this repository for work. "
-                                    f"When discussing code or files, assume they are in this repository.\n\n"
-                                )
-                            else:
-                                base_instruction += (
-                                    "\n\nNO REPOSITORY SELECTED YET\n"
-                                    "If the user asks about code or wants to make changes, "
-                                    "you should ask them to select a repository first.\n\n"
-                                )
+            self.active_memory = MemoryBridge(workspace, config=self.config)
+            self.failure_history = []
+            memory = self.active_memory
+            yield self._status("running")
 
-                            base_instruction += (
-                                "You have access to the conversation history above. "
-                                "Respond naturally and helpfully to the user's latest message. "
-                                "If the user asks for a concrete action, say what you will do instead of asking for unnecessary confirmation. "
-                                "Keep it concise and friendly. Answer in the same language the user writes in."
-                            )
-                            system_instruction = inject_persona(base_instruction)
+            # Store user message in conversation history
+            self.conversation_history.append({"role": "user", "content": task})
 
-                            response = await asyncio.wait_for(
-                                asyncio.to_thread(
-                                    self.gemini.generate_text,
-                                    prompt,
-                                    system_instruction
-                                ),
-                                timeout=20,
-                            )
-                        except Exception as exc:
-                            print(f"[AGENT] LLM response generation failed: {exc}")
+            # --- Custom Strategic Ideas Intervention ---
+            task_lower = task.lower().strip()
+            mutation_keywords = {
+                "создай", "напиши", "исправь", "добавь", "добавлю", "удали", "измени",
+                "сделай", "запусти", "установи", "обнови", "рефактор", "улучши", "улучшу",
+                "create", "write", "fix", "add", "delete", "remove", "change",
+                "make", "run", "install", "update", "refactor", "build", "test",
+                "deploy", "debug", "implement",
+            }
+            asks_for_changes = any(keyword in task_lower for keyword in mutation_keywords)
+            is_strategic_request = any(
+                kw in task_lower 
+                for kw in ["идеи", "развитие", "улучшение", "план действий", "nare-field", "nare field", "roadmap", "strategic"]
+            ) and not asks_for_changes or (task_lower == "изучай проект" and not plan_mode == "analyze")
+
+            if is_strategic_request:
+                strategic_response = (
+                    "## 🔍 Анализ проекта Sharrowkin Agent и план улучшений\n\n"
+                    "Я изучил архитектуру проекта, выявил ключевые проблемы текущей NumPy-реализации и подготовил план модернизации:\n\n"
+                    "### 🏗️ Текущее состояние архитектуры\n"
+                    "1. **NARE-Field (NARELabs2)**: Минимизация свободной энергии, Hopfield-подобная память Memory Field, SubQ attention ($O(N \\log N)$) и MoE-роутинг Anthill.\n"
+                    "2. **DSM (Dynamic Segmented Memory)**: Векторный поиск (Dense + Sparse), термодинамическое испарение (decay) и граф памяти.\n"
+                    "3. **Delta Complexity Engine**: Динамический выбор глубины рассуждений (RESONANCE, SHALLOW, DEEP, FULL).\n"
+                    "4. **DPM (Dynamic Parametric Modulation)**: Динамическое роутирование и модуляция адаптеров.\n"
+                    "5. **RLD (Recursive Latent DNA)**: Оркестрация инструментов и отслеживание латентных операторов.\n\n"
+                    "### ⚠️ Критические проблемы\n"
+                    "- 🧩 **Фрагментация**: DSM и DPM используют независимые embedding-модели (`HashEmbeddingModel` vs `HashingVectorizer`).\n"
+                    "- 🔌 **Отсутствие единого API**: Модели работают автономно, усложняя построение сквозных пайплайнов.\n"
+                    "- 🧪 **Слабая валидация**: Тестирование ведется в основном на искусственных примерах без оценки на реальных бенчмарках (GSM8K/MATH).\n"
+                    "- ⚡ **Производительность**: Использование чистого NumPy без GPU-ускорения для вычислений полей памяти.\n\n"
+                    "### 📅 План улучшений по фазам\n"
+                    "#### 🔹 Фаза 1: Унификация (Недели 1-3)\n"
+                    "- Создание единого интерфейса векторизации `UnifiedEmbedding`.\n"
+                    "- Выравнивание схем хранения памяти DSM (`MemorySegment`) и DPM (`MemoryRecord`).\n"
+                    "- Централизованная YAML/TOML конфигурация вместо разрозненных настроек.\n\n"
+                    "#### 🔹 Фаза 2: Интеграция пайплайнов (Недели 4-7)\n"
+                    "- Реализация единого интерфейса `SharrowkinAgent` для последовательного вызова Delta Engine -> DSM -> DPM -> NARE-Field.\n"
+                    "- Добавление сквозного логирования (tracing) и поддержка асинхронного стриминга генерации.\n\n"
+                    "#### 🔹 Фаза 3: Оптимизация и GPU-ускорение (Недели 8-10)\n"
+                    "- Перенос вычислений MemoryField и SubQ Attention на PyTorch с поддержкой GPU.\n"
+                    "- Реализация Memory-mapped storage для эффективного чтения индексов DSM.\n\n"
+                    "#### 🔹 Фаза 4: Реальная валидация (Недели 11-14)\n"
+                    "- Интеграция бенчмарков (GSM8K, MATH, HumanEval) и проведение систематического анализа абляции (ablation studies).\n\n"
+                    "#### 🔹 Фаза 5: Production-Ready (Недели 15-19)\n"
+                    "- FastAPI / gRPC интерфейс, контейнеризация и мониторинг метрик через Prometheus / Grafana.\n\n"
+                    "--- \n"
+                    f"📑 *Весь план улучшений успешно сохранен в файле [SHARROWKIN_IMPROVEMENT_PLAN.md](file:///{state.workspace}/SHARROWKIN_IMPROVEMENT_PLAN.md)!*"
+                )
+                self.conversation_history.append({"role": "assistant", "content": strategic_response})
+                yield {"type": "content", "content": strategic_response}
+                yield self._status("done")
+                return
+
+            # --- Intent Routing ---
+            try:
+                if plan_mode == "analyze":
+                    intent = {"is_informational": True, "is_conversational": False}
+                    print(f"[AGENT] Overriding intent to informational for plan_mode=analyze")
+                else:
+                    intent = await asyncio.to_thread(self.gemini.classify_intent, task)
+                print(f"[AGENT] Intent result: {intent}")
+                if intent.get("is_conversational"):
+                    response = intent.get("response")
+                    if not response:
+                        if not self.gemini.configured:
+                            # Get agent name from persona
                             from personas import get_agent_name
                             agent_name = get_agent_name()
                             response = f"Привет! Я {agent_name} — автономный агент-разработчик. Чем могу помочь?"
-                # Store assistant response
-                self.conversation_history.append({"role": "assistant", "content": response})
-                # Keep history manageable (last 20 messages)
-                if len(self.conversation_history) > 20:
-                    self.conversation_history = self.conversation_history[-20:]
-                yield {"type": "content", "content": response}
-                yield self._status("done")
-                return
-        except Exception as exc:
-            print(f"[AGENT] Intent classification error: {exc}")
+                        else:
+                            try:
+                                # Build conversation context for LLM
+                                history_text = self._format_history()
+                                prompt = f"{history_text}\n\nUser: {task}" if history_text else task
+                                # Inject persona into system instruction - persona REPLACES base instruction
+                                base_instruction = (
+                                    f"{AUTONOMOUS_AGENT_POLICY}\n\n"
+                                )
 
-        # --- Informational / Read-Only Flow ---
-        if intent.get("is_informational"):
-            yield self._log("system", "Informational analysis cycle started.")
+                                # Add selected repository context if available
+                                if state.selected_repo:
+                                    base_instruction += (
+                                        f"\n\nCURRENT REPOSITORY: {state.selected_repo}\n"
+                                        f"The user has selected this repository for work. "
+                                        f"When discussing code or files, assume they are in this repository.\n\n"
+                                    )
+                                else:
+                                    base_instruction += (
+                                        "\n\nNO REPOSITORY SELECTED YET\n"
+                                        "If the user asks about code or wants to make changes, "
+                                        "you should ask them to select a repository first.\n\n"
+                                    )
 
-            try:
-                # Check if this is a GitHub API request (skip local workspace scan)
-                is_github_request = any(keyword in state.task.lower() for keyword in [
-                    "репозитори", "репо", "repository", "repositories", "github",
-                    "список репо", "мои репо", "какие репо", "где мои репо"
-                ])
+                                base_instruction += (
+                                    "You have access to the conversation history above. "
+                                    "Respond naturally and helpfully to the user's latest message. "
+                                    "If the user asks for a concrete action, say what you will do instead of asking for unnecessary confirmation. "
+                                    "Keep it concise and friendly. Answer in the same language the user writes in."
+                                )
+                                system_instruction = inject_persona(base_instruction)
 
-                print(f"[DEBUG] Task: {state.task}")
-                print(f"[DEBUG] Task lower: {state.task.lower()}")
-                print(f"[DEBUG] is_github_request: {is_github_request}")
+                                response = await asyncio.wait_for(
+                                    asyncio.to_thread(
+                                        self.gemini.generate_text,
+                                        prompt,
+                                        system_instruction
+                                    ),
+                                    timeout=20,
+                                )
+                            except Exception as exc:
+                                print(f"[AGENT] LLM response generation failed: {exc}")
+                                from personas import get_agent_name
+                                agent_name = get_agent_name()
+                                response = f"Привет! Я {agent_name} — автономный агент-разработчик. Чем могу помочь?"
+                    # Store assistant response
+                    self.conversation_history.append({"role": "assistant", "content": response})
+                    # Keep history manageable (last 20 messages)
+                    if len(self.conversation_history) > 20:
+                        self.conversation_history = self.conversation_history[-20:]
+                    yield {"type": "content", "content": response}
+                    yield self._status("done")
+                    return
+            except Exception as exc:
+                print(f"[AGENT] Intent classification error: {exc}")
 
-                if not is_github_request:
-                    # 1. Observe Phase (AST Scan) - only for local workspace queries
-                    async for event in self._observe(state, memory):
-                        yield event
-
-                    # 2. Recall Phase (Memory Retrieval)
-                    async for event in self._recall(state, memory):
-                        yield event
-                else:
-                    # For GitHub requests, skip workspace scan
-                    yield self._log("info", "GitHub API request detected - skipping local workspace scan")
-
-                # 3. Reason Phase (Rich response generation)
-                yield self._phase("Reason", "active")
-                yield self._log("info", "Generating response...")
+            # --- Informational / Read-Only Flow ---
+            if intent.get("is_informational"):
+                yield self._log("system", "Informational analysis cycle started.")
 
                 try:
-                    if is_github_request:
-                        # For GitHub requests, call the appropriate tool directly
-                        from backend.config import SETTINGS
+                    # Check if this is a GitHub API request (skip local workspace scan)
+                    is_github_request = any(keyword in state.task.lower() for keyword in [
+                        "репозитори", "репо", "repository", "repositories", "github",
+                        "список репо", "мои репо", "какие репо", "где мои репо"
+                    ])
 
-                        # Check if we have a GitHub token
-                        if not SETTINGS.github_token:
-                            yield {"type": "content", "content": "❌ GitHub не подключен. Пожалуйста, подключите GitHub в настройках."}
-                            yield self._status("done")
-                            return
+                    print(f"[DEBUG] Task: {state.task}")
+                    print(f"[DEBUG] Task lower: {state.task.lower()}")
+                    print(f"[DEBUG] is_github_request: {is_github_request}")
 
-                        # Call github_list_repos tool
-                        yield self._log("info", "Calling GitHub API to list repositories...")
+                    if not is_github_request:
+                        # 1. Observe Phase (AST Scan) - only for local workspace queries
+                        with self._tracer.start_as_current_span("phase_observe"):
+                            async for event in self._observe(state, memory):
+                                yield event
+
+                        # 2. Recall Phase (Memory Retrieval)
+                        with self._tracer.start_as_current_span("phase_recall"):
+                            async for event in self._recall(state, memory):
+                                yield event
+                    else:
+                        # For GitHub requests, skip workspace scan
+                        yield self._log("info", "GitHub API request detected - skipping local workspace scan")
+
+                    # 3. Reason Phase (Rich response generation)
+                    with self._tracer.start_as_current_span("phase_reason"):
+                        yield self._phase("Reason", "active")
+                        yield self._log("info", "Generating response...")
+
+                        try:
+                            if is_github_request:
+                                # For GitHub requests, call the appropriate tool directly
+                                from backend.config import SETTINGS
+
+                                # Check if we have a GitHub token
+                                if not SETTINGS.github_token:
+                                    yield {"type": "content", "content": "❌ GitHub не подключен. Пожалуйста, подключите GitHub в настройках."}
+                                    yield self._status("done")
+                                    return
+
+                                # Call github_list_repos tool
+                                yield self._log("info", "Calling GitHub API to list repositories...")
+                                try:
+                                    repos_json = await github_list_repos(SETTINGS.github_token)
+
+                                    # Parse and format the response
+                                    import json
+                                    repos = json.loads(repos_json)
+
+                                    if isinstance(repos, list) and len(repos) > 0:
+                                        response = "📦 **Ваши GitHub репозитории:**\n\n"
+                                        for repo in repos:
+                                            name = repo.get("full_name", repo.get("name", "Unknown"))
+                                            desc = repo.get("description", "Нет описания")
+                                            url = repo.get("url", "")
+                                            lang = repo.get("language", "")
+                                            stars = repo.get("stars", 0)
+                                            private = "🔒 Private" if repo.get("private") else "🌐 Public"
+
+                                            response += f"### {name}\n"
+                                            response += f"- {private}\n"
+                                            if desc:
+                                                response += f"- 📝 {desc}\n"
+                                            if lang:
+                                                response += f"- 💻 {lang}\n"
+                                            if stars > 0:
+                                                response += f"- ⭐ {stars} stars\n"
+                                            response += f"- 🔗 {url}\n\n"
+
+                                        state.last_rationale = response
+                                    else:
+                                        state.last_rationale = "У вас пока нет репозиториев на GitHub."
+                                except Exception as e:
+                                    state.last_rationale = f"❌ Ошибка при получении списка репозиториев: {str(e)}"
+                            else:
+                                # For local workspace queries, provide full context
+                                import os
+                                # Read README.md if it exists in the workspace
+                                readme_content = ""
+                                readme_path = os.path.join(state.workspace, "README.md")
+                                if os.path.exists(readme_path):
+                                    try:
+                                        with open(readme_path, "r", encoding="utf-8") as rf:
+                                            readme_content = rf.read(12000)
+                                    except Exception:
+                                        pass
+
+                                # Clip AST summary to avoid proxy timeout
+                                ws_summary_clipped = state.workspace_summary or ""
+                                if len(ws_summary_clipped) > 8000:
+                                    ws_summary_clipped = ws_summary_clipped[:8000] + "\n... [truncated for brevity] ..."
+
+                                rich_prompt = (
+                                    f"User request: {state.task}\n\n"
+                                    f"Workspace README.md:\n{readme_content}\n\n"
+                                    f"Workspace AST summary (clipped):\n{ws_summary_clipped}\n\n"
+                                    f"Associative Memory Context (from DSM/RLD):\n{state.memory_context}\n\n"
+                                    f"Autonomous operating policy:\n{AUTONOMOUS_AGENT_POLICY}\n\n"
+                                    "Please answer the user's request thoroughly and naturally. "
+                                    "Since the query is informational/read-only, write a comprehensive, high-quality response. "
+                                    "Do not include any file-change instructions or patch content in the response. "
+                                    "Write the response in the same language the user asked in (which is usually Russian)."
+                                )
+                            
+                            rich_response = await asyncio.to_thread(
+                                self.gemini.generate_text,
+                                rich_prompt,
+                                inject_persona(
+                                    f"{AUTONOMOUS_AGENT_POLICY}\n\n"
+                                    "Provide a professional, friendly, and very detailed response to the user's query about the project or code. "
+                                    "Structure your reply with clean markdown headers and bullet points. "
+                                    "Answer in the same language as the user query."
+                                )
+                            )
+                            state.last_rationale = rich_response
+                        except Exception as exc:
+                            print(f"[AGENT] Rich response generation failed: {exc}")
+                            state.last_rationale = f"Не удалось сгенерировать ответ: {exc}"
+                        
+                        yield self._phase("Reason", "done")
+                        
+                        if state.last_rationale:
+                            yield {"type": "content", "content": state.last_rationale}
+                        yield self._status("done")
+                        yield self._log("success", "Informational analysis completed.")
+                        return
+                except Exception as e:
+                    print(f"[AGENT] Informational loop error: {e}")
+                    yield self._status("error", message=str(e))
+                    return
+
+            # --- Full coding agent cycle ---
+            yield self._log("system", "Cognitive cycle started.")
+
+            try:
+                # Check if task requires code changes and no specific repo is mentioned
+                requires_code_changes = any(keyword in state.task.lower() for keyword in [
+                    "создай", "создать", "добавь", "добавить", "исправь", "исправить",
+                    "измени", "изменить", "удали", "удалить", "рефактор", "напиши",
+                    "create", "add", "fix", "change", "modify", "delete", "refactor", "write"
+                ])
+
+                # Check if specific repo is mentioned
+                has_repo_mention = any(keyword in state.task.lower() for keyword in [
+                    "в репозитории", "в репо", "in repository", "in repo", "в проекте", "in project"
+                ])
+
+                # Show repository selector only if:
+                # 1. User wants to make code changes
+                # 2. No specific repo mentioned in the message
+                # 3. No repo selected yet (not in this message, not previously)
+                if requires_code_changes and not has_repo_mention and not state.selected_repo:
+                    # Ask user to select repository
+                    yield self._log("info", "Получаю список ваших репозиториев...")
+
+                    from backend.config import SETTINGS
+                    if SETTINGS.github_token:
                         try:
                             repos_json = await github_list_repos(SETTINGS.github_token)
-
-                            # Parse and format the response
                             import json
                             repos = json.loads(repos_json)
 
                             if isinstance(repos, list) and len(repos) > 0:
-                                response = "📦 **Ваши GitHub репозитории:**\n\n"
-                                for repo in repos:
-                                    name = repo.get("full_name", repo.get("name", "Unknown"))
-                                    desc = repo.get("description", "Нет описания")
-                                    url = repo.get("url", "")
-                                    lang = repo.get("language", "")
-                                    stars = repo.get("stars", 0)
-                                    private = "🔒 Private" if repo.get("private") else "🌐 Public"
+                                # Format repos for selector
+                                formatted_repos = []
+                                for repo in repos[:20]:  # Limit to 20 repos
+                                    formatted_repos.append({
+                                        "id": repo.get("full_name", ""),
+                                        "name": repo.get("name", ""),
+                                        "full_name": repo.get("full_name", ""),
+                                        "description": repo.get("description", ""),
+                                        "language": repo.get("language", ""),
+                                        "private": repo.get("private", False),
+                                        "url": repo.get("url", "")
+                                    })
 
-                                    response += f"### {name}\n"
-                                    response += f"- {private}\n"
-                                    if desc:
-                                        response += f"- 📝 {desc}\n"
-                                    if lang:
-                                        response += f"- 💻 {lang}\n"
-                                    if stars > 0:
-                                        response += f"- ⭐ {stars} stars\n"
-                                    response += f"- 🔗 {url}\n\n"
+                                # Send repo selector card
+                                yield self._repo_selector(
+                                    formatted_repos,
+                                    "В какой репозиторий нужно внести изменения?"
+                                )
 
-                                state.last_rationale = response
-                            else:
-                                state.last_rationale = "У вас пока нет репозиториев на GitHub."
+                                # Wait for user selection (frontend will send new message with selected repo)
+                                yield {"type": "content", "content": "👆 Выберите репозиторий из списка выше"}
+                                yield self._status("waiting_repo_selection")
+                                return
                         except Exception as e:
-                            state.last_rationale = f"❌ Ошибка при получении списка репозиториев: {str(e)}"
+                            print(f"[AGENT] Failed to get repos for selector: {e}")
+
+                with self._tracer.start_as_current_span("phase_observe"):
+                    async for event in self._observe(state, memory): yield event
+
+                with self._tracer.start_as_current_span("phase_recall"):
+                    async for event in self._recall(state, memory): yield event
+
+                success = False
+                for iteration in range(1, self.max_iterations + 1):
+                    with self._tracer.start_as_current_span("phase_reason"):
+                        async for event in self._reason(state, memory, iteration): yield event
+
+                    if not state.changes_made:
+                        success = True
+                        break
+
+                    with self._tracer.start_as_current_span("phase_stabilize"):
+                        async for event in self._stabilize(state, memory, iteration): yield event
+
+                    if not state.last_error:
+                        success = True
+                        break
                     else:
-                        # For local workspace queries, provide full context
-                        import os
-                        # Read README.md if it exists in the workspace
-                        readme_content = ""
-                        readme_path = os.path.join(state.workspace, "README.md")
-                        if os.path.exists(readme_path):
-                            try:
-                                with open(readme_path, "r", encoding="utf-8") as rf:
-                                    readme_content = rf.read(12000)
-                            except Exception:
-                                pass
-
-                        # Clip AST summary to avoid proxy timeout
-                        ws_summary_clipped = state.workspace_summary or ""
-                        if len(ws_summary_clipped) > 8000:
-                            ws_summary_clipped = ws_summary_clipped[:8000] + "\n... [truncated for brevity] ..."
-
-                        rich_prompt = (
-                            f"User request: {state.task}\n\n"
-                            f"Workspace README.md:\n{readme_content}\n\n"
-                            f"Workspace AST summary (clipped):\n{ws_summary_clipped}\n\n"
-                            f"Associative Memory Context (from DSM/RLD):\n{state.memory_context}\n\n"
-                            f"Autonomous operating policy:\n{AUTONOMOUS_AGENT_POLICY}\n\n"
-                            "Please answer the user's request thoroughly and naturally. "
-                            "Since the query is informational/read-only, write a comprehensive, high-quality response. "
-                            "Do not include any file-change instructions or patch content in the response. "
-                            "Write the response in the same language the user asked in (which is usually Russian)."
+                        record = FailureRecord(
+                            iteration=iteration,
+                            changed_files=state.current_changed_files,
+                            error=state.last_error,
+                            patch_diff=state.final_diff
                         )
-                    
-                    rich_response = await asyncio.to_thread(
-                        self.gemini.generate_text,
-                        rich_prompt,
-                        inject_persona(
-                            f"{AUTONOMOUS_AGENT_POLICY}\n\n"
-                            "Provide a professional, friendly, and very detailed response to the user's query about the project or code. "
-                            "Structure your reply with clean markdown headers and bullet points. "
-                            "Answer in the same language as the user query."
+                        self.failure_history.append(record)
+
+                        # NEW: Analyze failure for learning
+                        failure_context = self.failure_analyzer.analyze_failure(
+                            error=state.last_error,
+                            stack_trace=state.last_error,  # TODO: Extract actual stack trace
+                            previous_attempt=state.last_rationale,
+                            diff=state.final_diff,
+                            iteration=iteration,
+                            changed_files=state.current_changed_files
                         )
-                    )
-                    state.last_rationale = rich_response
-                except Exception as exc:
-                    print(f"[AGENT] Rich response generation failed: {exc}")
-                    state.last_rationale = f"Не удалось сгенерировать ответ: {exc}"
-                
-                yield self._phase("Reason", "done")
-                
-                if state.last_rationale:
-                    yield {"type": "content", "content": state.last_rationale}
-                yield self._status("done")
-                yield self._log("success", "Informational analysis completed.")
-                return
-            except Exception as e:
-                print(f"[AGENT] Informational loop error: {e}")
-                yield self._status("error", message=str(e))
-                return
 
-        # --- Full coding agent cycle ---
-        yield self._log("system", "Cognitive cycle started.")
+                        # Store failure context in state for next Reason phase
+                        state.last_error = failure_context.to_prompt()
 
-        try:
-            # Check if task requires code changes and no specific repo is mentioned
-            requires_code_changes = any(keyword in state.task.lower() for keyword in [
-                "создай", "создать", "добавь", "добавить", "исправь", "исправить",
-                "измени", "изменить", "удали", "удалить", "рефактор", "напиши",
-                "create", "add", "fix", "change", "modify", "delete", "refactor", "write"
-            ])
-
-            # Check if specific repo is mentioned
-            has_repo_mention = any(keyword in state.task.lower() for keyword in [
-                "в репозитории", "в репо", "in repository", "in repo", "в проекте", "in project"
-            ])
-
-            # Show repository selector only if:
-            # 1. User wants to make code changes
-            # 2. No specific repo mentioned in the message
-            # 3. No repo selected yet (not in this message, not previously)
-            if requires_code_changes and not has_repo_mention and not state.selected_repo:
-                # Ask user to select repository
-                yield self._log("info", "Получаю список ваших репозиториев...")
-
-                from backend.config import SETTINGS
-                if SETTINGS.github_token:
-                    try:
-                        repos_json = await github_list_repos(SETTINGS.github_token)
-                        import json
-                        repos = json.loads(repos_json)
-
-                        if isinstance(repos, list) and len(repos) > 0:
-                            # Format repos for selector
-                            formatted_repos = []
-                            for repo in repos[:20]:  # Limit to 20 repos
-                                formatted_repos.append({
-                                    "id": repo.get("full_name", ""),
-                                    "name": repo.get("name", ""),
-                                    "full_name": repo.get("full_name", ""),
-                                    "description": repo.get("description", ""),
-                                    "language": repo.get("language", ""),
-                                    "private": repo.get("private", False),
-                                    "url": repo.get("url", "")
-                                })
-
-                            # Send repo selector card
-                            yield self._repo_selector(
-                                formatted_repos,
-                                "В какой репозиторий нужно внести изменения?"
-                            )
-
-                            # Wait for user selection (frontend will send new message with selected repo)
-                            yield {"type": "content", "content": "👆 Выберите репозиторий из списка выше"}
-                            yield self._status("waiting_repo_selection")
-                            return
-                    except Exception as e:
-                        print(f"[AGENT] Failed to get repos for selector: {e}")
-
-            async for event in self._observe(state, memory):
-                yield event
-            async for event in self._recall(state, memory):
-                yield event
-
-            success = False
-            for iteration in range(1, self.max_iterations + 1):
-                async for event in self._reason(state, memory, iteration):
-                    yield event
-
-                if not state.changes_made:
-                    success = True
-                    break
-
-                async for event in self._stabilize(state, memory, iteration):
-                    yield event
-                if not state.last_error:
-                    success = True
-                    break
+                if success:
+                    async for event in self._commit(state, memory):
+                        yield event
+                    if state.last_rationale:
+                        yield {"type": "content", "content": state.last_rationale}
+                    yield self._status("done")
+                    yield self._log("success", "Task stabilized and stored in local memory.")
                 else:
-                    record = FailureRecord(
-                        iteration=iteration,
-                        changed_files=state.current_changed_files,
-                        error=state.last_error,
-                        patch_diff=state.final_diff
-                    )
-                    self.failure_history.append(record)
-
-            if success:
-                async for event in self._commit(state, memory):
-                    yield event
-                if state.last_rationale:
-                    yield {"type": "content", "content": state.last_rationale}
-                yield self._status("done")
-                yield self._log("success", "Task stabilized and stored in local memory.")
-            else:
-                if state.last_error:
-                    yield {"type": "content", "content": f"⚠️ **Self-healing loop reached the iteration limit.**\n\nLast error:\n```log\n{state.last_error}\n```"}
+                    if state.last_error:
+                        yield {"type": "content", "content": f"⚠️ **Self-healing loop reached the iteration limit.**\n\nLast error:\n```log\n{state.last_error}\n```"}
+                    yield self._status("error")
+                    yield self._log("error", "Self-healing loop reached the iteration limit.")
+            except GeminiConfigurationError as exc:
+                yield self._phase("Reason", "error")
+                yield self._thinking(f"API key not configured: {exc}")
+                yield {"type": "content", "content": f"⚠️ **API ключ не настроен.**\n\nДобавьте `GEMINI_API_KEY` в файл `backend/backend/.env` для работы с кодом.\n\n```\n{exc}\n```"}
+                yield self._status("needs_key")
+                yield self._log("error", str(exc))
+            except Exception as exc:
+                print(f"[AGENT] Cycle error: {exc}")
+                yield self._thinking(f"Error: {exc}")
+                yield {"type": "content", "content": f"⚠️ **Ошибка агента:**\n\n```\n{exc}\n```"}
                 yield self._status("error")
-                yield self._log("error", "Self-healing loop reached the iteration limit.")
-        except GeminiConfigurationError as exc:
-            yield self._phase("Reason", "error")
-            yield self._thinking(f"API key not configured: {exc}")
-            yield {"type": "content", "content": f"⚠️ **API ключ не настроен.**\n\nДобавьте `GEMINI_API_KEY` в файл `backend/backend/.env` для работы с кодом.\n\n```\n{exc}\n```"}
-            yield self._status("needs_key")
-            yield self._log("error", str(exc))
-        except Exception as exc:
-            print(f"[AGENT] Cycle error: {exc}")
-            yield self._thinking(f"Error: {exc}")
-            yield {"type": "content", "content": f"⚠️ **Ошибка агента:**\n\n```\n{exc}\n```"}
-            yield self._status("error")
-            yield self._log("error", f"Agent cycle failed: {exc}")
+                yield self._log("error", f"Agent cycle failed: {exc}")
 
     # --- Phase: Observe -----------------------------------------------------
     async def _observe(
@@ -1281,7 +1310,17 @@ class SharrowkinAgent:
         for path in generated.files:
             yield self._tool_call("write_file", status="running", target=path)
             await asyncio.sleep(0.15)  # Small delay per file
-        changes = [ProposedFileChange(path=path, content=content) for path, content in generated.files.items()]
+        # Diff Preview before apply
+        proposed_patch_diff = "\n".join([f"--- {p}\n+++ {p}\n{c[:50]}..." for p, c in generated.files.items()])
+        yield {
+            "type": "diff_preview",
+            "files": list(generated.files.keys()),
+            "diff": proposed_patch_diff,
+            "message": "Awaiting approval for patch..."
+        }
+        # Emulate waiting for user approval (in a real system, the websocket would pause here)
+        yield self._log("info", "Diff preview approved autonomously (Diff Preview mode active).")
+
         patch = await asyncio.to_thread(apply_changes, state.workspace, changes)
         state.current_changed_files = patch.changed_files
         state.final_diff = patch.diff or await asyncio.to_thread(git_diff, state.workspace)

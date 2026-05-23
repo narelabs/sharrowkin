@@ -78,11 +78,8 @@ async def agent_websocket(websocket: WebSocket):
             await websocket.close()
             return
 
-        # Create memory bridge
-        memory = MemoryBridge(workspace)
-
-        # Create agent
-        agent = SharrowkinAgent(workspace=workspace, memory=memory)
+        # Create agent (no workspace parameter in __init__)
+        agent = SharrowkinAgent()
         _active_agents[session_id] = agent
 
         # Send start event
@@ -93,8 +90,8 @@ async def agent_websocket(websocket: WebSocket):
             "workspace": str(workspace)
         })
 
-        # Run agent and stream events
-        async for event in agent.run(task):
+        # Run agent and stream events (pass workspace_path as string)
+        async for event in agent.run(task, workspace_path=str(workspace)):
             try:
                 await websocket.send_json(event)
             except Exception as e:

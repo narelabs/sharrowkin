@@ -15,9 +15,9 @@ import json
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from backend.tools.workspace_scanner import WorkspaceScanner
-from backend.agent.core import SharrowkinAgent
-from backend.memory.dsm.memory import DSMMemory
+from tools.workspace_scanner import WorkspaceScanner
+from agent.core import SharrowkinAgent
+from memory.dsm.memory import DSMMemory
 
 
 class Phase1Benchmark:

@@ -1,7 +1,7 @@
 """Tools module - Agent tools organized by category."""
 
 # Re-export from core/tools.py for backward compatibility
-from backend.core.tools import (
+from core.tools import (
     # Classes
     SymbolSummary,
     FileSummary,

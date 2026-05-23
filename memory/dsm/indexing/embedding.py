@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from typing import Protocol
-from backend.memory.common.embedding import tokenize, character_ngrams
+from memory.common.embedding import tokenize, character_ngrams
 
 class EmbeddingModel(Protocol):
     dim: int
@@ -16,7 +16,7 @@ class HashEmbeddingModel:
     """Facade for the unified deterministic hash embedding, returning lists for JSON compatibility."""
 
     def __init__(self, dim: int = 384):
-        from backend.memory.common.embedding import UnifiedHashEmbeddingModel
+        from memory.common.embedding import UnifiedHashEmbeddingModel
         self.dim = dim
         self._model = UnifiedHashEmbeddingModel(dim=dim)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from backend.memory.common.embedding import (
+from memory.common.embedding import (
     UnifiedHashEmbeddingModel,
     SentenceTransformerEmbeddingModel,
     EmbeddingAdapter

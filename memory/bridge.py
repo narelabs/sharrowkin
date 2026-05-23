@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 try:
-    from backend.memory.dsm.core.memory import DynamicSegmentedMemory
-    from backend.memory.dsm.core.models import ActiveContext
-    from backend.memory.rld.core import RecursiveLatentDNA
-    from backend.memory.rld.models import RLDContext
+    from memory.dsm.core.memory import DynamicSegmentedMemory
+    from memory.dsm.core.models import ActiveContext
+    from memory.rld.core import RecursiveLatentDNA
+    from memory.rld.models import RLDContext
 except ImportError as import_error:
     DynamicSegmentedMemory = None
     ActiveContext = None
@@ -18,7 +18,7 @@ except ImportError as import_error:
 else:
     IMPORT_ERROR = None
 
-from backend.config.settings import AgentConfig, load_config
+from config.settings import AgentConfig, load_config
 
 
 class MemoryBridge:
@@ -33,8 +33,8 @@ class MemoryBridge:
         self.dsm = None
 
         # Instantiate memory field and trace memory
-        from backend.memory.field import MemoryField
-        from backend.memory.trace import TraceMemory
+        from memory.field import MemoryField
+        from memory.trace import TraceMemory
         self.memory_field = MemoryField(self.memory_dir / "memory_field.json", default_dim=128)
         self.trace_memory = TraceMemory(self.memory_dir / "trace_memory.json")
 
@@ -58,7 +58,7 @@ class MemoryBridge:
             try:
                 embedding = self.rld.embedding_model.encode(task)
             except Exception:
-                from backend.memory.dsm.indexing.embedding import HashEmbeddingModel
+                from memory.dsm.indexing.embedding import HashEmbeddingModel
                 embedding = HashEmbeddingModel().encode(task)
         else:
             from memory.dsm.indexing.embedding import HashEmbeddingModel
@@ -171,7 +171,7 @@ class MemoryBridge:
             try:
                 embedding = self.rld.embedding_model.encode(task)
             except Exception:
-                from backend.memory.dsm.indexing.embedding import HashEmbeddingModel
+                from memory.dsm.indexing.embedding import HashEmbeddingModel
                 embedding = HashEmbeddingModel().encode(task)
         else:
             from memory.dsm.indexing.embedding import HashEmbeddingModel

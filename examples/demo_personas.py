@@ -6,7 +6,7 @@ the agent's personality, logs, and responses.
 
 from pathlib import Path
 
-from backend.personas import (
+from personas import (
     PersonaManager,
     activate_persona,
     deactivate_persona,
@@ -14,7 +14,7 @@ from backend.personas import (
     get_persona_manager,
     inject_persona,
 )
-from backend.personas.llm_integration import LogType
+from personas.llm_integration import LogType
 
 
 def demo_persona_loading():

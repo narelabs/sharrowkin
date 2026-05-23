@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from backend.memory.dsm import DynamicSegmentedMemory
+from memory.dsm import DynamicSegmentedMemory
 
 
 def test_memory_performance():

@@ -8,7 +8,7 @@ from __future__ import annotations
 import abc
 from typing import Any, Awaitable, Generic, TypeVar
 
-from backend.core.types import HookResult, QuestionHookResult, ToolCall
+from core.types import HookResult, QuestionHookResult, ToolCall
 
 
 # --- Contexts ---

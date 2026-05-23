@@ -6,9 +6,9 @@ from pathlib import Path
 import asyncio
 import json
 
-from backend.agent import SharrowkinAgent, PHASES
-from backend.memory import MemoryBridge
-from backend.sessions import get_session_manager
+from agent import SharrowkinAgent, PHASES
+from memory import MemoryBridge
+from sessions import get_session_manager
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 

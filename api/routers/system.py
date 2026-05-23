@@ -6,7 +6,7 @@ import os
 import psutil
 from pathlib import Path
 
-from backend.personas import get_persona_manager, activate_persona, deactivate_persona, get_agent_name
+from personas import get_persona_manager, activate_persona, deactivate_persona, get_agent_name
 
 router = APIRouter(prefix="/api", tags=["system"])
 

@@ -8,13 +8,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import math
 
-from backend.core.llm.client import AUTONOMOUS_AGENT_POLICY, GeminiClient, GeminiConfigurationError
-from backend.core import types
-from backend.memory import MemoryBridge
+from core.llm.client import AUTONOMOUS_AGENT_POLICY, GeminiClient, GeminiConfigurationError
+from core import types
+from memory import MemoryBridge
 
-from backend.personas import get_persona_manager, inject_persona, format_log
-from backend.personas.llm_integration import LogType
-from backend.core.tools import (
+from personas import get_persona_manager, inject_persona, format_log
+from personas.llm_integration import LogType
+from core.tools import (
     ProposedFileChange,
     apply_changes,
     git_diff,
@@ -33,10 +33,10 @@ from backend.core.tools import (
     github_create_pr,
     github_clone_repo,
 )
-from backend.analysis.code.dependency import DependencyAnalyzer
-from backend.analysis.code.semantic_graph import SemanticGraph, SemanticGraphBuilder
-from backend.config import AgentConfig, load_config
-from backend.core.workspace_cache import WorkspaceCache, CachedWorkspace
+from analysis.code.dependency import DependencyAnalyzer
+from analysis.code.semantic_graph import SemanticGraph, SemanticGraphBuilder
+from config import AgentConfig, load_config
+from core.workspace_cache import WorkspaceCache, CachedWorkspace
 
 PHASES = ["Observe", "Recall", "Reason", "Stabilize", "Commit"]
 
@@ -578,7 +578,7 @@ class SharrowkinAgent:
                 try:
                     if is_github_request:
                         # For GitHub requests, call the appropriate tool directly
-                        from backend.config import SETTINGS
+                        from config import SETTINGS
 
                         # Check if we have a GitHub token
                         if not SETTINGS.github_token:
@@ -701,7 +701,7 @@ class SharrowkinAgent:
                 # Ask user to select repository
                 yield self._log("info", "Получаю список ваших репозиториев...")
 
-                from backend.config import SETTINGS
+                from config import SETTINGS
                 if SETTINGS.github_token:
                     try:
                         repos_json = await github_list_repos(SETTINGS.github_token)

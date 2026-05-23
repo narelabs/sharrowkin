@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from backend.sessions import get_session_manager
+from sessions import get_session_manager
 from typing import List
 
 router = APIRouter(tags=["sessions"])
@@ -40,7 +40,7 @@ async def import_sessions(sessions: List[SessionImport]):
 
         # Create session
         now = datetime.utcnow().isoformat() + "Z"
-        from backend.sessions import Session
+        from sessions import Session
 
         session = Session(
             id=s.id,

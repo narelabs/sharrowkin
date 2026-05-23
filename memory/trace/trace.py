@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import time
-from backend.memory.dsm.indexing.embedding import cosine
+from memory.dsm.indexing.embedding import cosine
 
 class TraceMemory:
     """Tracks historical reasoning traces for trace_replay queries."""

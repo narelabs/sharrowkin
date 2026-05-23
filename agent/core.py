@@ -10,15 +10,16 @@ import math
 import time
 from typing import Any
 import os
+import httpx
 
 from monitoring.telemetry import get_tracer
-from backend.core.llm.client import AUTONOMOUS_AGENT_POLICY, GeminiClient, GeminiConfigurationError
-from backend.core import types
-from backend.memory import MemoryBridge
+from core.llm.client import AUTONOMOUS_AGENT_POLICY, GeminiClient, GeminiConfigurationError
+from core import types
+from memory import MemoryBridge
 
-from backend.personas import get_persona_manager, inject_persona, format_log
-from backend.personas.llm_integration import LogType
-from backend.core.tools import (
+from personas import get_persona_manager, inject_persona, format_log
+from personas.llm_integration import LogType
+from core.tools import (
     ProposedFileChange,
     apply_changes,
     git_diff,
@@ -37,11 +38,12 @@ from backend.core.tools import (
     github_create_pr,
     github_clone_repo,
 )
-from backend.analysis.code.dependency import DependencyAnalyzer
-from backend.analysis.code.semantic_graph import SemanticGraph, SemanticGraphBuilder
-from backend.config.settings import AgentConfig, load_config
-from backend.agent.workspace_cache import WorkspaceCache, CachedWorkspace
-from backend.agent.failure_analyzer import FailureAnalyzer, FailureContext
+from analysis.code.dependency import DependencyAnalyzer
+from analysis.code.semantic_graph import SemanticGraph, SemanticGraphBuilder
+from config.settings import AgentConfig, load_config
+from agent.workspace_cache import WorkspaceCache, CachedWorkspace
+from agent.failure_analyzer import FailureAnalyzer, FailureContext
+from core.plugins.base import PluginManager
 
 PHASES = ["Observe", "Recall", "Reason", "Stabilize", "Commit"]
 
@@ -218,6 +220,7 @@ class SharrowkinAgent:
         self.failure_history: list[FailureRecord] = []
         self.failure_analyzer = FailureAnalyzer()  # NEW: Analyze failures for learning
         self._tracer = get_tracer()
+        self.plugins = PluginManager(self)
 
     def _get_energy_ledger(self, state: AgentRunState, memory: MemoryBridge, phase: str, iteration: int = 1) -> dict:
         """Compute the algorithmic energy footprint of cognitive execution."""
@@ -489,7 +492,7 @@ class SharrowkinAgent:
                     intent = {"is_informational": True, "is_conversational": False}
                     print(f"[AGENT] Overriding intent to informational for plan_mode=analyze")
                 else:
-                    intent = await asyncio.to_thread(self.gemini.classify_intent, task)
+                    intent = await self.gemini.classify_intent(task)
                 print(f"[AGENT] Intent result: {intent}")
                 if intent.get("is_conversational"):
                     response = intent.get("response")
@@ -532,8 +535,7 @@ class SharrowkinAgent:
                                 system_instruction = inject_persona(base_instruction)
 
                                 response = await asyncio.wait_for(
-                                    asyncio.to_thread(
-                                        self.gemini.generate_text,
+                                    self.gemini.generate_text(
                                         prompt,
                                         system_instruction
                                     ),
@@ -592,7 +594,7 @@ class SharrowkinAgent:
                         try:
                             if is_github_request:
                                 # For GitHub requests, call the appropriate tool directly
-                                from backend.config import SETTINGS
+                                from config import SETTINGS
 
                                 # Check if we have a GitHub token
                                 if not SETTINGS.github_token:
@@ -664,8 +666,7 @@ class SharrowkinAgent:
                                     "Write the response in the same language the user asked in (which is usually Russian)."
                                 )
                             
-                            rich_response = await asyncio.to_thread(
-                                self.gemini.generate_text,
+                            rich_response = await self.gemini.generate_text(
                                 rich_prompt,
                                 inject_persona(
                                     f"{AUTONOMOUS_AGENT_POLICY}\n\n"
@@ -715,7 +716,7 @@ class SharrowkinAgent:
                     # Ask user to select repository
                     yield self._log("info", "Получаю список ваших репозиториев...")
 
-                    from backend.config import SETTINGS
+                    from config import SETTINGS
                     if SETTINGS.github_token:
                         try:
                             repos_json = await github_list_repos(SETTINGS.github_token)
@@ -792,6 +793,11 @@ class SharrowkinAgent:
                         # Store failure context in state for next Reason phase
                         state.last_error = failure_context.to_prompt()
 
+                        # Exponential backoff before retry (Phase 1 Stability)
+                        backoff_time = 2 ** iteration
+                        yield self._log("info", f"Ожидаю {backoff_time}s перед следующей попыткой исправления (exponential backoff)...")
+                        await asyncio.sleep(backoff_time)
+
                 if success:
                     async for event in self._commit(state, memory):
                         yield event
@@ -811,6 +817,7 @@ class SharrowkinAgent:
                 yield self._status("needs_key")
                 yield self._log("error", str(exc))
             except Exception as exc:
+                await self.plugins.run_on_error(state, exc)
                 print(f"[AGENT] Cycle error: {exc}")
                 yield self._thinking(f"Error: {exc}")
                 yield {"type": "content", "content": f"⚠️ **Ошибка агента:**\n\n```\n{exc}\n```"}
@@ -824,6 +831,7 @@ class SharrowkinAgent:
         memory: MemoryBridge,
     ) -> AsyncIterator[dict[str, object]]:
         yield self._phase("Observe", "active")
+        await self.plugins.run_pre_observe(state)
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1032,6 +1040,7 @@ class SharrowkinAgent:
             "energy_ledger": self._get_energy_ledger(state, memory, "Observe"),
             "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
         }
+        await self.plugins.run_post_observe(state)
         yield self._phase("Observe", "done")
 
     # --- Phase: Recall ------------------------------------------------------
@@ -1041,6 +1050,7 @@ class SharrowkinAgent:
         memory: MemoryBridge,
     ) -> AsyncIterator[dict[str, object]]:
         yield self._phase("Recall", "active")
+        await self.plugins.run_pre_recall(state)
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1064,6 +1074,7 @@ class SharrowkinAgent:
             "energy_ledger": self._get_energy_ledger(state, memory, "Recall"),
             "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
         }
+        await self.plugins.run_post_recall(state)
         yield self._phase("Recall", "done")
 
     # --- Phase: Reason (patch generation) -----------------------------------
@@ -1074,6 +1085,7 @@ class SharrowkinAgent:
         iteration: int,
     ) -> AsyncIterator[dict[str, object]]:
         yield self._phase("Reason", "active")
+        await self.plugins.run_pre_reason(state, iteration)
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1130,8 +1142,8 @@ class SharrowkinAgent:
                     "Return ONLY a JSON array of relative file paths, e.g. [\"src/main.py\", \"lib/utils.ts\"]. "
                     "No markdown, no explanation."
                 )
-                raw_files = await asyncio.to_thread(
-                    self.gemini.generate_text, plan_prompt,
+                raw_files = await self.gemini.generate_text(
+                    plan_prompt,
                     "You are a code analysis agent. Return only a JSON array of file paths."
                 )
                 import json, re
@@ -1206,9 +1218,9 @@ class SharrowkinAgent:
         yield self._tool_call("llm_generate", status="running", target=self.gemini.model_id if hasattr(self.gemini, 'model_id') else "LLM", detail=f"iteration {iteration}")
         await asyncio.sleep(0.4)
 
-        # Use regular Gemini client (no Antigravity SDK dependency)
-        generated = await asyncio.to_thread(
-            self.gemini.generate_patch,
+        # Use regular Gemini client (no Antigravity SDK dependency) with automatic context reduction on timeout/error
+        try:
+            generated = await self.gemini.generate_patch(
                 task=state.task,
                 workspace_summary=workspace_summary_enriched,
                 memory_context=state.memory_context,
@@ -1216,8 +1228,28 @@ class SharrowkinAgent:
                 action_history=state.actions,
                 file_contents=file_contents,
             )
+        except (httpx.TimeoutException, httpx.ReadTimeout, httpx.WriteTimeout, Exception) as exc:
+            yield self._log("warning", f"Генерация патча завершилась с ошибкой или таймаутом: {exc}. Снижаю размер контекста и пробую снова...")
+            
+            # Reduce context dynamically
+            ws_summary_reduced = workspace_summary_enriched[:4000] + "\n... [truncated due to timeout] ..."
+            mem_context_reduced = state.memory_context[:2000] + "\n... [truncated due to timeout] ..."
+            file_contents_reduced = {}
+            for path, content in file_contents.items():
+                file_contents_reduced[path] = content[:4000] + "\n... [truncated due to timeout] ..."
+            
+            # Retry once with reduced context
+            generated = await self.gemini.generate_patch(
+                task=state.task,
+                workspace_summary=ws_summary_reduced,
+                memory_context=mem_context_reduced,
+                previous_error=previous_err_combined,
+                action_history=state.actions,
+                file_contents=file_contents_reduced,
+            )
             
         state.last_rationale = generated.rationale
+        await self.plugins.run_post_reason(state, generated, iteration)
         await asyncio.sleep(0.2)
         yield self._tool_call("llm_generate", status="done", target="LLM (Antigravity)", detail=f"{len(generated.files)} files, {len(generated.commands)} commands")
 
@@ -1285,8 +1317,7 @@ class SharrowkinAgent:
                         "Do not include any file-change instructions or patch content in the response. "
                         "Write the response in the same language the user asked in (which is usually Russian)."
                     )
-                    rich_response = await asyncio.to_thread(
-                        self.gemini.generate_text,
+                    rich_response = await self.gemini.generate_text(
                         rich_prompt,
                         inject_persona(
                             f"{AUTONOMOUS_AGENT_POLICY}\n\n"
@@ -1357,6 +1388,7 @@ class SharrowkinAgent:
         iteration: int,
     ) -> AsyncIterator[dict[str, object]]:
         yield self._phase("Stabilize", "active")
+        await self.plugins.run_pre_stabilize(state, iteration)
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1380,6 +1412,7 @@ class SharrowkinAgent:
                 "energy_ledger": self._get_energy_ledger(state, memory, "Stabilize", iteration),
                 "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
             }
+            await self.plugins.run_post_stabilize(state, True, iteration)
             yield self._phase("Stabilize", "done")
             return
 
@@ -1438,6 +1471,7 @@ class SharrowkinAgent:
             "energy_ledger": self._get_energy_ledger(state, memory, "Stabilize", iteration),
             "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
         }
+        await self.plugins.run_post_stabilize(state, False, iteration)
         yield self._phase("Stabilize", "error")
 
     def _parse_pytest_error(self, output: str) -> dict[str, str] | None:
@@ -1498,6 +1532,7 @@ class SharrowkinAgent:
         memory: MemoryBridge,
     ) -> AsyncIterator[dict[str, object]]:
         yield self._phase("Commit", "active")
+        await self.plugins.run_pre_commit(state)
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1528,4 +1563,5 @@ class SharrowkinAgent:
             "energy_ledger": self._get_energy_ledger(state, memory, "Commit"),
             "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
         }
+        await self.plugins.run_post_commit(state)
         yield self._phase("Commit", "done")

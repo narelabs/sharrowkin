@@ -4,11 +4,11 @@ import logging
 from pathlib import Path
 from typing import Any, Protocol
 
-from backend.memory.dsm.indexing.embedding import EmbeddingModel, HashEmbeddingModel, cosine, mean_embedding, tokenize, top_terms
-from backend.memory.dsm.core.memory import DynamicSegmentedMemory
-from backend.memory.dsm.core.models import RouteResult
-from backend.memory.dsm.storage.storage import JsonStorage
-from backend.memory.rld.sqlite_store import RldSqliteStore
+from memory.dsm.indexing.embedding import EmbeddingModel, HashEmbeddingModel, cosine, mean_embedding, tokenize, top_terms
+from memory.dsm.core.memory import DynamicSegmentedMemory
+from memory.dsm.core.models import RouteResult
+from memory.dsm.storage.storage import JsonStorage
+from memory.rld.sqlite_store import RldSqliteStore
 
 import os
 

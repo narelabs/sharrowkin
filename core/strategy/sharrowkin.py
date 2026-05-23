@@ -4,11 +4,11 @@ import uuid
 from typing import Any, AsyncIterator
 import pydantic
 
-from backend.core import types
-from backend.core.hooks.runner import HookRunner
-from backend.core.hooks.base import SessionContext, TurnContext
-from backend.core.llm.client import GeminiClient, AUTONOMOUS_AGENT_POLICY, GeneratedPatch
-from backend.core.tools import run_terminal_command, apply_changes, git_diff, run_pytest, read_file, list_files, ProposedFileChange
+from core import types
+from core.hooks.runner import HookRunner
+from core.hooks.base import SessionContext, TurnContext
+from core.llm.client import GeminiClient, AUTONOMOUS_AGENT_POLICY, GeneratedPatch
+from core.tools import run_terminal_command, apply_changes, git_diff, run_pytest, read_file, list_files, ProposedFileChange
 
 class SharrowkinAgentConfig(pydantic.BaseModel):
     """Configuration for Sharrowkin Agent."""

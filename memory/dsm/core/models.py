@@ -113,7 +113,7 @@ class ConflictRecord:
         )
 
 
-from backend.memory.common.schema import (
+from memory.common.schema import (
     PriorityVector,
     UnifiedMemorySegment as MemorySegment
 )

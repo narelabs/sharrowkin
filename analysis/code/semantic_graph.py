@@ -84,6 +84,8 @@ class SemanticGraph:
         self.dsm_path.mkdir(parents=True, exist_ok=True)
         self.git_hotspots: list[tuple[str, int]] = []
         self.recent_commits: list[dict[str, str]] = []
+        import threading
+        self._lock = threading.Lock()
 
     def get_detected_patterns(self) -> dict[str, list[str]]:
         """Aggregate detected design patterns from class node metadata."""
@@ -103,14 +105,15 @@ class SemanticGraph:
         return patterns
 
     def add_node(self, node: CodeNode) -> None:
-        """Add a node to the graph."""
-        self.nodes[node.id] = node
+        """Add a node to the graph in a thread-safe manner."""
+        with self._lock:
+            self.nodes[node.id] = node
 
-        # Update parent's children list
-        if node.parent_id and node.parent_id in self.nodes:
-            parent = self.nodes[node.parent_id]
-            if node.id not in parent.children_ids:
-                parent.children_ids.append(node.id)
+            # Update parent's children list
+            if node.parent_id and node.parent_id in self.nodes:
+                parent = self.nodes[node.parent_id]
+                if node.id not in parent.children_ids:
+                    parent.children_ids.append(node.id)
 
     def get_node(self, node_id: str) -> CodeNode | None:
         """Get a node by ID."""
@@ -451,9 +454,11 @@ class SemanticGraphBuilder:
             print(f"Warning: Could not build semantic graph for {file_path}: {e}")
 
     def build_from_directory(self, directory: Path, recursive: bool = True) -> None:
-        """Build semantic graph from all Python files in a directory."""
+        """Build semantic graph from all Python files in a directory concurrently."""
         pattern = "**/*.py" if recursive else "*.py"
         ignored_dirs = {"venv", "node_modules", "blocksuite", "archive", "media_assets", "memory_dumps", "storage"}
+        
+        file_paths = []
         for file_path in directory.glob(pattern):
             try:
                 parts = file_path.relative_to(directory).parts
@@ -465,9 +470,19 @@ class SemanticGraphBuilder:
             if file_path.name.startswith("__") or file_path.name.startswith("."):
                 continue
 
-            relative = file_path.relative_to(directory)
-            module_name = str(relative.with_suffix("")).replace("/", ".").replace("\\", ".")
-            self.build_from_file(file_path, module_name)
+            file_paths.append(file_path)
+
+        # Build files concurrently using a ThreadPoolExecutor
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
+            for file_path in file_paths:
+                relative = file_path.relative_to(directory)
+                module_name = str(relative.with_suffix("")).replace("/", ".").replace("\\", ".")
+                futures.append(executor.submit(self.build_from_file, file_path, module_name))
+            
+            # Wait for all files to complete
+            concurrent.futures.wait(futures)
 
         # Run Git analyzer
         try:

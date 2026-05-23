@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 import os
 
-from backend.integrations.github import GitHubOAuth, GitHubAPI, GitHubRepository
+from integrations.github import GitHubOAuth, GitHubAPI, GitHubRepository
 
 router = APIRouter(prefix="/api/github", tags=["github"])
 

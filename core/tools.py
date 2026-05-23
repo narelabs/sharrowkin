@@ -453,7 +453,7 @@ async def github_list_repos(token: str) -> str:
         JSON string with list of repositories
     """
     try:
-        from backend.integrations.github import GitHubAPI
+        from integrations.github import GitHubAPI
 
         api = GitHubAPI(token)
         repos = await api.list_repos()
@@ -491,7 +491,7 @@ async def github_get_repo_info(token: str, owner: str, repo: str) -> str:
         JSON string with repository details
     """
     try:
-        from backend.integrations.github import GitHubAPI
+        from integrations.github import GitHubAPI
 
         api = GitHubAPI(token)
         repo_data = await api.get_repo(owner, repo)
@@ -514,7 +514,7 @@ async def github_list_branches(token: str, owner: str, repo: str) -> str:
         JSON string with list of branches
     """
     try:
-        from backend.integrations.github import GitHubAPI
+        from integrations.github import GitHubAPI
 
         api = GitHubAPI(token)
         branches = await api.list_branches(owner, repo)
@@ -549,7 +549,7 @@ async def github_create_pr(
         JSON string with PR details
     """
     try:
-        from backend.integrations.github import GitHubAPI
+        from integrations.github import GitHubAPI
 
         api = GitHubAPI(token)
         pr = await api.create_pr(owner, repo, title, body, head, base)

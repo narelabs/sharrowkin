@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.main import health, terminal_endpoint
+from main import health, terminal_endpoint
 
 
 class FakeRequest:

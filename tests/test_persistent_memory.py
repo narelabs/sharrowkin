@@ -2,8 +2,8 @@
 
 import pytest
 from pathlib import Path
-from backend.agent.core import SharrowkinAgent
-from backend.memory import MemoryBridge
+from agent.core import SharrowkinAgent
+from memory import MemoryBridge
 
 
 @pytest.mark.asyncio

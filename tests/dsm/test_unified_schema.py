@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import pytest
-from backend.memory.common.schema import (
+from memory.common.schema import (
     MemoryKind,
     PriorityVector,
     UnifiedMemorySegment

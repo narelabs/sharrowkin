@@ -59,6 +59,16 @@ export function TerminalEmulator({
     e.preventDefault()
     if (currentInput.trim()) {
       const typed = currentInput.trim()
+      
+      // Sandbox validation guard (Emulated Devin sandbox security)
+      const unsafeKeywords = ["rm -rf", "mkfs", "dd ", "shutdown", "reboot", "chmod 777", "curl ", "wget "]
+      const isUnsafe = unsafeKeywords.some(keyword => typed.includes(keyword))
+      
+      if (isUnsafe) {
+        alert(`🔒 Sharrowkin Sandbox Protection:\nCommand "${typed}" contains potentially destructive operations. Sharrowkin has blocked execution to preserve sandbox integrity.`)
+        return
+      }
+
       const stored = localStorage.getItem("sharrowkin-recent-commands")
       let commands = stored ? JSON.parse(stored) : []
       

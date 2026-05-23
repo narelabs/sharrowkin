@@ -8,8 +8,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from backend.core.types import HookResult, ToolCall
-from backend.core.hooks.base import (
+from core.types import HookResult, ToolCall
+from core.hooks.base import (
     Hook,
     HookContext,
     SessionContext,

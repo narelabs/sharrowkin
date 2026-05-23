@@ -3,8 +3,8 @@
 import pytest
 import time
 from pathlib import Path
-from backend.memory.optimized.cached_embedding import CachedEmbeddingModel
-from backend.memory.dsm.indexing.embedding import HashEmbeddingModel
+from memory.optimized.cached_embedding import CachedEmbeddingModel
+from memory.dsm.indexing.embedding import HashEmbeddingModel
 
 
 def test_cached_embedding_basic():

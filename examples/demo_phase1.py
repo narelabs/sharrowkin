@@ -6,8 +6,8 @@ to decompose tasks and understand codebase structure.
 
 from pathlib import Path
 
-from backend.planning import HierarchicalPlanner, PlanningContext, ProgressTracker
-from backend.analysis import DependencyAnalyzer, SemanticGraph, SemanticGraphBuilder
+from planning import HierarchicalPlanner, PlanningContext, ProgressTracker
+from analysis import DependencyAnalyzer, SemanticGraph, SemanticGraphBuilder
 
 
 def demo_hierarchical_planning():
@@ -67,7 +67,7 @@ def demo_progress_tracking():
     print("=" * 60)
 
     # Create a simple task graph
-    from backend.planning import TaskGraph, Task, TaskStatus, TaskPriority
+    from planning import TaskGraph, Task, TaskStatus, TaskPriority
 
     graph = TaskGraph()
 

@@ -1,6 +1,6 @@
 """Hook system for Sharrowkin Agent."""
 
-from backend.core.hooks.base import (
+from core.hooks.base import (
     Hook,
     HookContext,
     SessionContext,

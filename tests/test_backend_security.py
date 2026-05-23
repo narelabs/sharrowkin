@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.core.tools import run_terminal_command, split_safe_command
+from core.tools import run_terminal_command, split_safe_command
 
 
 def test_split_safe_command_blocks_wrapper_bypass():

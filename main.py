@@ -38,8 +38,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Import routers
-from backend.api import github_router, agent_router, system_router
-from backend.api.sessions import router as sessions_router
+from api import github_router, agent_router, system_router
+from api.sessions import router as sessions_router
 
 # Create FastAPI app
 app = FastAPI(
@@ -79,7 +79,7 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "backend.main:app",
+        "main:app",
         host="0.0.0.0",
         port=8000,
         reload=True

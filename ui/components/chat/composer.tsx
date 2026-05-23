@@ -263,16 +263,16 @@ export function Composer({
       <div className="relative max-w-3xl mx-auto pointer-events-auto">
         <div
           className={cn(
-            "flex flex-col bg-white border border-stone-300/80 transition-all duration-300 relative rounded-[28px] overflow-hidden",
-            "focus-within:border-stone-400 focus-within:shadow-md",
-            "shadow-[0_2px_16px_rgba(0,0,0,0.06)]"
+            "flex flex-col bg-white/95 backdrop-blur-sm border border-stone-200/40 transition-all duration-300 relative rounded-[28px] overflow-hidden",
+            "focus-within:border-stone-300/60 focus-within:shadow-[0_4px_24px_rgba(0,0,0,0.06)]",
+            "shadow-[0_2px_12px_rgba(0,0,0,0.03)]"
           )}
         >
           {/* Uploaded Image Preview */}
           {uploadedImage && (
             <div className={cn("px-4 pt-4 pb-0 transition-all", showImageBounce && "image-bounce")}>
               <div className="relative inline-block">
-                <div className="w-16 h-16 rounded-xl overflow-hidden border border-stone-200/60 shadow-sm">
+                <div className="w-16 h-16 rounded-xl overflow-hidden">
                   <Image
                     src={uploadedImage || "/placeholder.svg"}
                     alt="Uploaded image"
@@ -283,7 +283,7 @@ export function Composer({
                 </div>
                 <button
                   onClick={removeImage}
-                  className="absolute -top-2 -right-2 w-5 h-5 bg-stone-100 border border-stone-200 text-stone-600 hover:bg-stone-200 rounded-full flex items-center justify-center transition-colors"
+                  className="absolute -top-2 -right-2 w-5 h-5 bg-stone-100/90 text-stone-500 hover:bg-stone-200 rounded-full flex items-center justify-center transition-colors"
                   aria-label="Remove image"
                 >
                   <X className="w-3 h-3" />
@@ -391,7 +391,7 @@ export function Composer({
                     align="start"
                     side="top"
                     sideOffset={12}
-                    className="w-44 p-1.5 rounded-[16px] border border-stone-200/60 shadow-lg bg-white/90 backdrop-blur-xl z-[9999]"
+                    className="w-44 p-1.5 rounded-[16px] border border-stone-100/50 shadow-lg bg-white/95 backdrop-blur-xl z-[9999]"
                   >
                     {AI_MODELS.map((model) => (
                       <DropdownMenuItem
@@ -458,13 +458,13 @@ export function Composer({
                   <Square className="w-3.5 h-3.5" fill="currentColor" aria-hidden="true" />
                 </button>
               ) : (
-                <div className="flex items-center gap-1 shrink-0 bg-stone-50 border border-stone-200 rounded-full p-0.5 shadow-sm">
+                <div className="flex items-center gap-1 shrink-0 bg-stone-50/80 border border-stone-200/40 rounded-full p-0.5">
                   {/* Dropdown trigger */}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
                         onClick={playClickSound}
-                        className="h-8 min-w-[128px] rounded-full bg-white px-3 text-stone-700 border border-stone-200 hover:border-stone-300 hover:text-stone-950 transition-colors outline-none"
+                        className="h-8 min-w-[128px] rounded-full bg-white px-3 text-stone-700 border border-stone-200/40 hover:border-stone-300/60 hover:text-stone-950 transition-colors outline-none"
                       >
                         <div className="flex h-full items-center justify-center gap-1.5 text-[12.5px] font-medium">
                           <SelectedIcon className="w-3.5 h-3.5 text-stone-500" />
@@ -477,7 +477,7 @@ export function Composer({
                       align="end"
                       side="top"
                       sideOffset={12}
-                      className="w-[280px] p-1.5 rounded-[20px] border border-stone-250/20 shadow-xl bg-white/95 backdrop-blur-xl z-[9999]"
+                      className="w-[280px] p-1.5 rounded-[20px] border border-stone-100/50 shadow-xl bg-white/95 backdrop-blur-xl z-[9999]"
                     >
                       {PLAN_MODES.map((mode) => {
                         const Icon = mode.icon

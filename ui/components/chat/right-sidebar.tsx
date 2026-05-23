@@ -245,7 +245,7 @@ export function RightSidebar({
         style={{ width: isOpen ? `${width}px` : "0px" }}
         className={cn(
           "hidden lg:flex flex-col bg-white overflow-hidden shrink-0 relative select-none",
-          isOpen && "border-l border-stone-200/70",
+          isOpen && "border-l border-stone-100/30",
           isResizing ? "transition-none" : "transition-all duration-300 ease-in-out"
         )}
       >
@@ -261,7 +261,7 @@ export function RightSidebar({
         )}
 
         {/* Scrollable Tab Header */}
-        <div className="px-3 py-2.5 border-b border-stone-200/60 bg-white shrink-0">
+        <div className="px-3 py-2.5 border-b border-stone-100/40 bg-white shrink-0">
           <div className="flex gap-0.5 overflow-x-auto no-scrollbar">
             {tabs.map((tab) => {
               const IconComponent = tab.icon
@@ -475,8 +475,8 @@ export function RightSidebar({
                   </p>
                 </div>
               ) : (
-                <div className="h-full flex flex-col items-center justify-center p-6 text-center bg-stone-50 border border-stone-200/60 rounded-2xl animate-in fade-in duration-300 min-h-[300px]">
-                  <div className="w-10 h-10 rounded-full bg-white border border-stone-200 flex items-center justify-center text-stone-400 shadow-sm mb-3">
+                <div className="h-full flex flex-col items-center justify-center p-6 text-center bg-stone-50/50 rounded-2xl animate-in fade-in duration-300 min-h-[300px]">
+                  <div className="w-10 h-10 rounded-full bg-white/80 flex items-center justify-center text-stone-400 mb-3">
                     <TerminalIcon size={18} strokeWidth={1.5} />
                   </div>
                   <h4 className="text-[13px] font-medium text-stone-700 font-sans">Terminal docked at bottom</h4>
@@ -497,7 +497,7 @@ export function RightSidebar({
           {/* LOGS VIEW - Tool Activity Stream */}
           {activeTab === "logs" && (
             <div className="p-0 bg-white">
-              <div className="border-b border-stone-200/60 px-5 py-3 flex items-center justify-between">
+              <div className="border-b border-stone-100/40 px-5 py-3 flex items-center justify-between">
                 <span className="text-[11px] font-medium text-stone-400 uppercase tracking-widest font-sans">Activity Stream</span>
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -544,7 +544,7 @@ export function RightSidebar({
 
               <div>
                 <div className="text-[11px] font-medium text-stone-400 uppercase tracking-widest mb-3 px-1 font-sans">Active Workspace</div>
-                <div className="bg-white border border-stone-200/80 rounded-2xl overflow-hidden shadow-[0_1px_8px_rgba(0,0,0,0.01)]">
+                <div className="bg-white border border-stone-100/40 rounded-2xl overflow-hidden shadow-[0_1px_8px_rgba(0,0,0,0.01)]">
                   <div className="p-3.5 border-b border-stone-100 flex items-center justify-between gap-3">
                     <span className="text-[12.5px] text-stone-600 truncate">Model</span>
                     <span className="text-[11px] font-mono text-stone-500 truncate max-w-[170px]">{selectedModel}</span>
@@ -564,7 +564,7 @@ export function RightSidebar({
               {projectIntelligence.status !== "unknown" && (
                 <div>
                   <div className="text-[11px] font-medium text-stone-400 uppercase tracking-widest mb-3 px-1 font-sans">Workspace Intelligence</div>
-                  <div className="bg-white border border-stone-200/80 rounded-2xl p-4 shadow-[0_1px_8px_rgba(0,0,0,0.01)] space-y-4">
+                  <div className="bg-white border border-stone-100/40 rounded-2xl p-4 shadow-[0_1px_8px_rgba(0,0,0,0.01)] space-y-4">
 
                     <div className="grid grid-cols-2 gap-3">
                       <div className="flex flex-col">
@@ -610,7 +610,7 @@ export function RightSidebar({
               {/* Performance Section */}
               <div>
                 <div className="text-[11px] font-medium text-stone-400 uppercase tracking-widest mb-3 px-1 font-sans">System Performance</div>
-                <div className="bg-white border border-stone-200/80 rounded-2xl p-4 shadow-[0_1px_8px_rgba(0,0,0,0.01)] space-y-4">
+                <div className="bg-white border border-stone-100/40 rounded-2xl p-4 shadow-[0_1px_8px_rgba(0,0,0,0.01)] space-y-4">
                   <div className="space-y-1.5">
                     <div className="flex justify-between items-center text-[12px] font-sans text-stone-500">
                       <span>Compute Usage (CPU)</span>
@@ -646,7 +646,7 @@ export function RightSidebar({
               {/* Network & Intel Section */}
               <div>
                 <div className="text-[11px] font-medium text-stone-400 uppercase tracking-widest mb-3 px-1 font-sans">Network & Intel</div>
-                <div className="bg-white border border-stone-200/80 rounded-2xl overflow-hidden shadow-[0_1px_8px_rgba(0,0,0,0.01)] select-none">
+                <div className="bg-white border border-stone-100/40 rounded-2xl overflow-hidden shadow-[0_1px_8px_rgba(0,0,0,0.01)] select-none">
                   <div className="flex items-center justify-between p-3.5 border-b border-stone-100">
                     <div className="flex items-center gap-2.5">
                       <Wifi strokeWidth={1.5} className="w-4 h-4 text-stone-400" />
@@ -670,7 +670,7 @@ export function RightSidebar({
               {/* Agent Services Section */}
               <div>
                 <div className="text-[11px] font-medium text-stone-400 uppercase tracking-widest mb-3 px-1 font-sans">Agent Services</div>
-                <div className="bg-white border border-stone-200/80 rounded-2xl p-4 shadow-[0_1px_8px_rgba(0,0,0,0.01)] space-y-3.5">
+                <div className="bg-white border border-stone-100/40 rounded-2xl p-4 shadow-[0_1px_8px_rgba(0,0,0,0.01)] space-y-3.5">
                   {[
                     { name: "Repository index", desc: "Project files and symbols", active: true },
                     { name: "Command runner", desc: "Build, test, and verification tasks", active: true },
@@ -703,7 +703,7 @@ export function RightSidebar({
           {activeTab === "api" && (
             <div className="p-4 space-y-4">
               <div className="text-[11px] font-medium text-stone-400 uppercase tracking-widest mb-3 px-1 font-sans">API Keys & Endpoints</div>
-              <div className="bg-white border border-stone-200/80 rounded-2xl overflow-hidden shadow-[0_1px_8px_rgba(0,0,0,0.01)]">
+              <div className="bg-white border border-stone-100/40 rounded-2xl overflow-hidden shadow-[0_1px_8px_rgba(0,0,0,0.01)]">
                 <div className="p-3.5 border-b border-stone-100 flex items-center justify-between gap-3">
                   <span className="text-[12.5px] text-stone-600 font-sans">Backend URL</span>
                   <span className="text-[11px] font-mono text-stone-500 truncate max-w-[170px]">{BACKEND_URL.replace(/^https?:\/\//, "")}</span>
@@ -727,7 +727,7 @@ export function RightSidebar({
           {activeTab === "deploy" && (
             <div className="p-4 space-y-4">
               <div className="text-[11px] font-medium text-stone-400 uppercase tracking-widest mb-3 px-1 font-sans">Deployment</div>
-              <div className="bg-white border border-stone-200/80 rounded-2xl p-4 shadow-[0_1px_8px_rgba(0,0,0,0.01)]">
+              <div className="bg-white border border-stone-100/40 rounded-2xl p-4 shadow-[0_1px_8px_rgba(0,0,0,0.01)]">
                 {deploymentInfo ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">

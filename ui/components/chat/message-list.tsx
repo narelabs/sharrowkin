@@ -90,7 +90,7 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded, o
   if (!isLoaded) {
     return (
       <div className="absolute inset-0 flex items-center justify-center">
-        <div className="h-6 w-6 rounded-full border border-stone-200 border-t-stone-500 animate-spin" />
+        <div className="h-6 w-6 rounded-full border border-stone-100 border-t-stone-400 animate-spin" />
       </div>
     )
   }
@@ -124,7 +124,7 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded, o
             ))}
           </div>
 
-          <div className="relative mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-stone-200 bg-white shadow-[0_2px_12px_rgba(0,0,0,0.04)] transition-all duration-300 hover:-translate-y-[2px] hover:shadow-[0_4px_20px_rgba(0,0,0,0.08)]">
+          <div className="relative mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/80 transition-all duration-300 hover:-translate-y-[2px]">
             <Bot size={22} strokeWidth={1.5} className="text-stone-600 relative z-10" />
           </div>
 

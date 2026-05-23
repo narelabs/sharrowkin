@@ -96,14 +96,14 @@ export function TerminalEmulator({
       onClick={handleContainerClick}
     >
       {/* Apple-Like Ultra-Minimalist Terminal Panel */}
-      <div className="flex-1 bg-white border border-stone-200/60 rounded-2xl flex flex-col overflow-hidden shadow-[0_1px_8px_rgba(0,0,0,0.015)] min-h-0 relative">
+      <div className="flex-1 bg-white border border-stone-100/30 rounded-2xl flex flex-col overflow-hidden min-h-0 relative">
         
         {/* Clean Terminal Header */}
         <div 
           draggable={true}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
-          className="flex items-center justify-between px-4 py-2 border-b border-stone-200/60 bg-stone-50/80 shrink-0 select-none cursor-grab active:cursor-grabbing hover:bg-stone-100/50 transition-all z-10"
+          className="flex items-center justify-between px-4 py-2 border-b border-stone-100/30 bg-stone-50/60 shrink-0 select-none cursor-grab active:cursor-grabbing hover:bg-stone-100/40 transition-all z-10"
           title="Drag header to move or dock terminal"
         >
           <div className="flex items-center gap-2.5">

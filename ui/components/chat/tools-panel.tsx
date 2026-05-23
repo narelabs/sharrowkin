@@ -155,7 +155,7 @@ export function ToolsPanel() {
                   "flex flex-col items-center gap-1.5 p-2.5 rounded-xl border transition-all text-center",
                   run?.status === "running"
                     ? "border-stone-300 bg-stone-50 cursor-wait"
-                    : "border-stone-200/60 bg-white hover:bg-stone-50 hover:border-stone-300"
+                    : "border-stone-100/40 bg-white hover:bg-stone-50 hover:border-stone-200/60"
                 )}
               >
                 <div className="relative">
@@ -184,7 +184,7 @@ export function ToolsPanel() {
           const isExpanded = expandedCategory === cat
 
           return (
-            <div key={cat} className="rounded-xl border border-stone-200/60 bg-white overflow-hidden">
+            <div key={cat} className="rounded-xl border border-stone-100/40 bg-white overflow-hidden">
               <button
                 onClick={() => setExpandedCategory(isExpanded ? null : cat)}
                 className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-stone-50/80 transition-colors"

@@ -45,7 +45,7 @@ export function DiffViewer({ filename, diffContent, onClose, onAccept }: DiffVie
   return (
     <div className="h-full flex flex-col bg-white">
       {/* Diff Header */}
-      <div className="h-14 border-b border-stone-200/60 flex items-center justify-between px-6 bg-white shrink-0">
+      <div className="h-14 border-b border-stone-100/40 flex items-center justify-between px-6 bg-white shrink-0">
         <div className="flex items-center gap-2.5">
           <FileCode className="w-4 h-4 text-stone-400" strokeWidth={1.5} />
           <span className="font-medium text-[13px] text-stone-700">{filename}</span>
@@ -101,7 +101,7 @@ export function DiffViewer({ filename, diffContent, onClose, onAccept }: DiffVie
             <span className="text-[13px]">No diff content available yet.</span>
           </div>
         ) : (
-          <div className="border border-stone-200/60 bg-white rounded-2xl overflow-hidden shadow-[0_1px_8px_rgba(0,0,0,0.01)]">
+          <div className="border border-stone-100/30 bg-white rounded-2xl overflow-hidden">
             <div className="p-4 overflow-x-auto text-[12.5px] font-mono leading-relaxed select-text">
               <div className="space-y-0">
                 {parsedLines.map((line, idx) => (
@@ -127,12 +127,12 @@ export function DiffViewer({ filename, diffContent, onClose, onAccept }: DiffVie
 
       {/* Action Bar */}
       {!hasAccepted && diffContent && (
-        <div className="h-16 border-t border-stone-200/60 px-6 flex items-center justify-between bg-white shrink-0 shadow-[0_-4px_16px_rgba(0,0,0,0.01)]">
+        <div className="h-16 border-t border-stone-100/40 px-6 flex items-center justify-between bg-white shrink-0">
           <span className="text-[12px] text-stone-400">{additions} additions, {deletions} deletions</span>
           <div className="flex gap-2">
             <button
               onClick={onClose}
-              className="px-3.5 py-1.5 border border-stone-200 text-stone-500 rounded-lg hover:bg-stone-50 transition-colors text-[12.5px] font-normal"
+              className="px-3.5 py-1.5 border border-stone-200/40 text-stone-500 rounded-lg hover:bg-stone-50 transition-colors text-[12.5px] font-normal"
             >
               Reject
             </button>

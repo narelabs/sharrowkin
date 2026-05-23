@@ -6,6 +6,7 @@ import type { Message, ToolStep, TaskPlan } from "./chat-shell"
 import { Loader2, CheckCircle2, ChevronRight, ChevronDown, CircleDashed, FileCode, XCircle, ListTodo, Clock, Bug, AlertCircle, Lightbulb, Bot, Search, Wrench, FlaskConical, Brain } from "lucide-react"
 import { MarkdownRenderer } from "./markdown-renderer"
 import { RepoSelectorCard } from "./repo-selector-card"
+import { StreamingEditedSteps, useStreamingEdits } from "./streaming-edited-steps"
 import Image from "next/image"
 
 interface MessageBubbleProps {
@@ -70,7 +71,6 @@ function extractRepoSelector(content: string): { content: string; repoSelector: 
 
 function getActivityKind(step: ToolStep): AgentActivityKind {
   const text = `${step.name} ${step.description || ""}`.toLowerCase()
-  // Tool call patterns — Devin-style: "Edited path/file.py +N", "Read path/file.py"
   if (/^edited\s/.test(text) || /\+\d+\s*$/.test(step.name)) return "file"
   if (/\.(tsx?|jsx?|css|scss|py|html|md|json|ya?ml|mjs|cjs)\b/.test(text) || /\+\d+\s*[−-]\d+/.test(text)) return "file"
   if (/^thought\b|think|reason|plan|context|^memory\s/.test(text)) return "thinking"
@@ -98,188 +98,139 @@ function getKindIcon(kind: AgentActivityKind) {
   return Bot
 }
 
-function getKindColor(kind: AgentActivityKind): { bg: string; border: string; text: string; icon: string } {
-  // All steps use neutral gray colors, shimmer effect will be added separately for running steps
-  return {
-    bg: "bg-stone-50",
-    border: "border-stone-200/60",
-    text: "text-stone-700",
-    icon: "text-stone-500"
-  }
+function shortenPath(raw: string): string {
+  const parts = raw.replace(/\\/g, "/").split("/").filter(Boolean)
+  if (parts.length <= 2) return parts.join("/")
+  return parts.slice(-2).join("/")
 }
 
-// Extract file paths into beautiful badges
-function renderDescriptionWithFiles(text: string, onOpenDiff?: (filename: string) => void) {
-  const regex = /([a-zA-Z]:\\[^\s\]'"]+)|((?:[\w.-]+\/)+[\w.-]+)|'([\w.-]+\.\w+)'|"([\w.-]+\.\w+)"/g;
-  const parts = [];
-  let lastIndex = 0;
-  let match;
-  
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(<span key={`text-${lastIndex}`}>{text.substring(lastIndex, match.index)}</span>);
+function extractTarget(step: ToolStep): string | null {
+  const desc = step.description || ""
+  const name = step.name || ""
+  const full = `${name} ${desc}`
+  const fileMatch = full.match(/([a-zA-Z]:\\[^\s'"]+)|((?:[\w@.-]+\/)+[\w@.-]+\.\w+)/);
+  if (fileMatch) return shortenPath(fileMatch[0])
+  const projMatch = desc.match(/^\s*([\w.-]+)\s*$/)
+  if (projMatch && !desc.includes(" ")) return projMatch[1]
+  return null
+}
+
+
+function formatStepDisplay(step: ToolStep): { verb: string; target: string | null; detail: string | null; isCode: boolean } {
+  const name = step.name || ""
+  const desc = step.description || ""
+  const nameLower = name.toLowerCase()
+  const target = extractTarget(step)
+
+  if (step.id?.startsWith("tool-call-")) {
+    const parts = name.split(/\s+/)
+    const verb = parts[0] || name
+    const rest = parts.slice(1).join(" ")
+    return { verb, target: rest ? shortenPath(rest) : target, detail: null, isCode: true }
+  }
+
+  if (/^(scan|read|search|explore|analyze|memory|thought|terminal|git|run|edited|write)/i.test(nameLower)) {
+    const parts = name.split(/\s+/)
+    const verb = parts[0]
+    const rest = parts.slice(1).join(" ")
+    if (rest && rest.length > 0) {
+      return { verb, target: shortenPath(rest), detail: desc && desc !== rest ? desc : null, isCode: /[./\\]/.test(rest) }
     }
-    const path = match[1] || match[2] || match[3] || match[4];
-    const filename = path.split(/[\\/]/).pop() || path;
-    const isClickable = !!onOpenDiff;
-    
-    parts.push(
-      <span 
-        key={`file-${match.index}`} 
-        onClick={(e) => {
-          if (onOpenDiff) {
-            e.stopPropagation();
-            onOpenDiff("agent-patch.diff"); // Or pass the actual filename if the diff viewer supports it
-          }
-        }}
-        className={cn(
-          "inline-flex items-center gap-1 px-1.5 py-0 mx-1 bg-stone-100 text-stone-700 border border-stone-200/60 rounded-md text-[11px] font-mono shadow-[0_1px_2px_rgba(0,0,0,0.02)] translate-y-[-1px]",
-          isClickable && "cursor-pointer hover:bg-stone-200/80 hover:border-stone-300 transition-colors"
-        )}
-      >
-        <FileCode size={11} className="text-stone-400" />
-        {filename}
-      </span>
-    );
-    lastIndex = regex.lastIndex;
+    return { verb, target, detail: desc || null, isCode: false }
   }
-  
-  if (lastIndex < text.length) {
-    parts.push(<span key={`text-${lastIndex}`}>{text.substring(lastIndex)}</span>);
+
+  if (/explored|scanning|exploring/i.test(nameLower)) {
+    return { verb: name, target, detail: null, isCode: false }
   }
-  
-  return parts.length > 0 ? parts : text;
+
+  if (target) {
+    return { verb: name.replace(target, "").replace(/\s+/g, " ").trim() || name, target, detail: null, isCode: true }
+  }
+
+  return { verb: name, target: null, detail: desc || null, isCode: false }
 }
 
 function AgentTimelineRow({ step, index, onOpenDiff }: { step: ToolStep; index: number, onOpenDiff?: (filename: string) => void }) {
   const isRunning = step.status === "running"
   const kind = getActivityKind(step)
   const KindIcon = getKindIcon(kind)
-  const colors = getKindColor(kind)
-
   const isFilePatch = step.id.startsWith("patch-") || step.name.toLowerCase().includes("patch") || step.name === "Prepared code changes"
-  const isFileKind = kind === "file"
-  const filename = step.description?.split(" ").find(part => /\.(tsx?|jsx?|css|scss|py|html|md|json|ya?ml|mjs|cjs)\b/.test(part))
-
-  // Filter out redundant descriptions
-  const shouldShowDescription = step.description && !["Finished.", "Done", "Working"].includes(step.description.trim())
-
-  // Try to detect terminal commands to style them like a console
-  const isTerminalCommand = shouldShowDescription && (step.description!.includes("$ ") || step.description!.includes("npm ") || step.description!.includes("git ") || step.description!.includes("python "))
+  const display = formatStepDisplay(step)
 
   return (
     <div
       className={cn(
-        "relative flex items-start gap-3 py-1.5 group transition-all duration-200",
+        "relative flex items-center gap-2.5 py-[5px] group transition-all duration-150",
         isFilePatch && onOpenDiff && "cursor-pointer hover:bg-stone-50/50 rounded-lg px-2 -mx-2"
       )}
       onClick={() => { if (isFilePatch && onOpenDiff) onOpenDiff("agent-patch.diff") }}
     >
-      <div className="relative -ml-[7px] mt-[3px] flex h-3.5 w-3.5 shrink-0 items-center justify-center bg-white">
+      <div className="flex h-4 w-4 shrink-0 items-center justify-center">
         {isRunning ? (
-          <KindIcon strokeWidth={1.8} className={cn("h-3.5 w-3.5 animate-pulse transition-colors", colors.icon)} />
+          <KindIcon strokeWidth={1.8} className="h-3.5 w-3.5 animate-pulse text-stone-500" />
         ) : step.status === "error" ? (
-          getStepIcon(step.status)
+          <XCircle strokeWidth={1.5} className="h-3.5 w-3.5 text-red-500/80" />
         ) : (
-          <KindIcon strokeWidth={1.5} className="h-3.5 w-3.5 text-stone-400" />
+          <KindIcon strokeWidth={1.5} className="h-3.5 w-3.5 text-stone-300" />
         )}
       </div>
-      <div className="min-w-0 flex-1 text-[13px] font-normal leading-5 text-stone-500">
-        {step.id?.startsWith("tool-call-") ? (
-          <>
-            <span className={cn("font-medium transition-colors", step.status === "error" ? "text-red-600" : isRunning ? colors.text : "text-stone-700")}>
-              {step.name}
-            </span>
-          </>
-        ) : (
-          <>
-            <span className={cn(
-              "relative inline-block transition-colors",
-              isRunning ? "text-stone-700 font-medium" : "text-stone-400"
-            )}>
-              {isRunning && (
-                <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/90 to-transparent opacity-90 animate-shimmer pointer-events-none" />
-              )}
-              <span className="relative z-10">{getKindLabel(kind)}</span>
-            </span>
-            <span className={cn("ml-2 font-medium transition-colors", step.status === "error" ? "text-red-600" : isRunning ? colors.text : "text-stone-700")}>
-              {(isFilePatch || isFileKind) && !step.name.includes(" ") ? (
-                 <span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 bg-stone-100 text-stone-700 border border-stone-200/60 rounded-md text-[11.5px] font-mono shadow-[0_1px_2px_rgba(0,0,0,0.02)] translate-y-[-1px] transition-colors">
-                   <FileCode size={12} className="text-stone-400" />
-                   {step.name}
-                 </span>
-              ) : step.name}
-            </span>
-          </>
+      <div className="min-w-0 flex-1 flex items-center gap-1.5 text-[13px] leading-5">
+        <span className={cn(
+          "shrink-0 transition-colors",
+          step.status === "error" ? "text-red-600 font-medium" : isRunning ? "text-stone-700 font-medium" : "text-stone-500"
+        )}>
+          {display.verb}
+        </span>
+        {display.target && (
+          <code className={cn(
+            "inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11.5px] font-mono leading-5 truncate max-w-[280px]",
+            "bg-stone-100/70 text-stone-600"
+          )}>
+            {display.isCode && <FileCode size={11} className="text-stone-400 shrink-0" />}
+            {display.target}
+          </code>
         )}
-        
-        {shouldShowDescription && (
-          <div className="mt-1">
-            {isTerminalCommand ? (
-              <div className="text-[11.5px] font-mono text-stone-600 whitespace-pre-wrap break-all leading-relaxed bg-stone-50/80 border border-stone-200/50 rounded-md px-2.5 py-2">
-                {step.description?.split('\n').map((line, i) => (
-                  <div key={i} className="flex">
-                    {line.startsWith("$") ? (
-                      <>
-                        <span className="text-emerald-600/80 font-semibold mr-2 shrink-0">$</span>
-                        <span className="text-indigo-600/80">{line.substring(1).trim()}</span>
-                      </>
-                    ) : (
-                      <span>{line}</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-[13px] font-normal leading-relaxed text-stone-500">
-                {renderDescriptionWithFiles(step.description!, isFilePatch ? onOpenDiff : undefined)}
-              </div>
-            )}
-          </div>
+        {display.detail && !display.target && (
+          <span className="text-stone-400 truncate">{display.detail}</span>
         )}
       </div>
-      <span className="shrink-0 text-[12px] tabular-nums text-stone-400 opacity-0 group-hover:opacity-100 transition-opacity">{getStepDuration(index, isRunning)}</span>
+      <span className={cn(
+        "shrink-0 text-[11px] tabular-nums text-stone-400 transition-opacity",
+        isRunning ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+      )}>{getStepDuration(index, isRunning)}</span>
     </div>
   )
 }
 
 function AgentTimelineFileGroup({ group, index }: { group: ToolStep[]; index: number }) {
+  const [expanded, setExpanded] = useState(false)
   const isRunning = group.some(s => s.status === "running")
   const hasError = group.some(s => s.status === "error")
   const kind = getActivityKind(group[0])
   const KindIcon = getKindIcon(kind)
   
   return (
-    <div className="relative flex items-start gap-3 py-2 group/timeline">
-      <div className="relative -ml-[7px] mt-[3px] flex h-3.5 w-3.5 shrink-0 items-center justify-center bg-white">
-        {isRunning ? getStepIcon("running") : hasError ? getStepIcon("error") : <KindIcon strokeWidth={1.5} className="h-3.5 w-3.5 text-stone-400" />}
-      </div>
-      <div className="min-w-0 flex-1 text-[13px] font-normal leading-5 text-stone-500">
-        <span className="text-stone-400">{getKindLabel(kind)}</span>
-        <span className={cn("ml-2 font-medium text-stone-700")}>
-          Worked on {group.length} files
-        </span>
-        
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {group.map((step) => {
-            const rawPath = step.description?.split('\n')[0]?.trim() || step.name;
-            const pathParts = rawPath.split(/[\\/]/);
-            const filename = pathParts.pop();
-            const directory = pathParts.length > 0 ? pathParts.join('/') + '/' : '';
-
-            return (
-              <span key={step.id} className="inline-flex items-center gap-1.5 px-2 py-1 bg-stone-50 text-stone-700 border border-stone-200/80 rounded-md text-[11.5px] font-mono shadow-sm hover:bg-stone-100 hover:border-stone-300 transition-all cursor-default">
-                <FileCode size={12} className={step.status === "error" ? "text-red-400" : "text-stone-400"} />
-                <span className={step.status === "error" ? "text-red-600" : ""}>
-                  {directory && <span className="text-stone-400 font-normal">{directory}</span>}
-                  {filename}
-                </span>
-              </span>
-            )
-          })}
+    <div className="py-[2px]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2.5 py-[5px] group transition-all duration-150 text-left"
+      >
+        <div className="flex h-4 w-4 shrink-0 items-center justify-center">
+          {isRunning ? <Loader2 strokeWidth={1.5} className="h-3.5 w-3.5 animate-spin text-stone-400" /> : hasError ? <XCircle strokeWidth={1.5} className="h-3.5 w-3.5 text-red-500/80" /> : <KindIcon strokeWidth={1.5} className="h-3.5 w-3.5 text-stone-300" />}
         </div>
-      </div>
-      <span className="shrink-0 text-[12px] tabular-nums text-stone-400 opacity-0 group-hover/timeline:opacity-100 transition-opacity">{getStepDuration(index, isRunning)}</span>
+        <div className="min-w-0 flex-1 flex items-center gap-1.5 text-[13px] leading-5">
+          {expanded ? <ChevronDown size={12} className="text-stone-400 shrink-0" /> : <ChevronRight size={12} className="text-stone-400 shrink-0" />}
+          <span className="text-stone-500">Worked on {group.length} files</span>
+        </div>
+        <span className="shrink-0 text-[11px] tabular-nums text-stone-400 opacity-0 group-hover:opacity-100 transition-opacity">{getStepDuration(index, isRunning)}</span>
+      </button>
+      {expanded && (
+        <div className="ml-6 pl-4 border-l border-stone-100/60 space-y-0">
+          {group.map((step) => (
+            <AgentTimelineRow key={step.id} step={step} index={index} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -336,10 +287,47 @@ function TaskPlanItem({ task, depth = 0 }: { task: TaskPlan; depth?: number }) {
   )
 }
 
+function ThoughtSection({ lines, isStreaming }: { lines: string[]; isStreaming: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  const preview = lines[0]?.slice(0, 120) || "Reasoning..."
+  
+  return (
+    <div className="py-[2px]">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-[13px] leading-5 transition-colors hover:text-stone-600 group py-[3px]"
+      >
+        <Brain size={14} strokeWidth={1.5} className={cn("text-stone-400 shrink-0", isStreaming && "animate-pulse")} />
+        {expanded ? <ChevronDown size={12} className="text-stone-400 shrink-0" /> : <ChevronRight size={12} className="text-stone-400 shrink-0" />}
+        <span className={cn("transition-colors", isStreaming ? "text-stone-700 font-medium" : "text-stone-400")}>
+          Thought{isStreaming ? "..." : ""}
+        </span>
+      </button>
+      {expanded && (
+        <div className="ml-3 pl-4 border-l border-stone-100/60 py-2 text-[13px] text-stone-500 leading-6 max-h-[300px] overflow-y-auto no-scrollbar">
+          {lines.map((line, i) => (
+            <div key={i} className="animate-in fade-in duration-200" style={{ animationDelay: `${i * 30}ms` }}>
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+      {!expanded && (
+        <div className="ml-8 text-[12px] text-stone-400 truncate max-w-[500px] leading-5">
+          {preview}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function MessageBubble({ message, isStreaming = false, onOpenDiff }: MessageBubbleProps) {
   const isUser = message.role === "user"
   const [expandedSteps, setExpandedSteps] = useState(true)
   const [now, setNow] = useState(() => Date.now())
+
+  // Use streaming edits hook
+  const streamingEdits = useStreamingEdits(message.toolSteps)
 
   useEffect(() => {
     if (isUser || !isStreaming) return
@@ -403,75 +391,77 @@ export function MessageBubble({ message, isStreaming = false, onOpenDiff }: Mess
     }
 
     return (
-      <div className="w-full max-w-3xl mx-auto py-6 animate-in fade-in duration-300">
+      <div className="w-full max-w-3xl mx-auto py-8 animate-in fade-in duration-300">
         <div className="flex flex-col gap-4">
-          <div className="space-y-2">
-            <button
-              onClick={() => setExpandedSteps(!expandedSteps)}
-              className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] font-normal leading-5 transition-colors hover:text-stone-600 group"
-            >
-              {expandedSteps ? <ChevronDown size={13} strokeWidth={1.5} className="text-stone-400" /> : <ChevronRight size={13} strokeWidth={1.5} className="text-stone-400" />}
-              <span className={cn(
-                "relative inline-block transition-all duration-300",
-                (isStreaming || isWorking) ? "text-stone-700 font-medium" : "text-stone-400"
-              )}>
-                {(isStreaming || isWorking) && (
-                  <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent opacity-90 animate-shimmer pointer-events-none" />
-                )}
-                <span className="relative z-10">{isStreaming || isWorking ? "Working" : "Worked"} for {elapsed}</span>
-              </span>
-              {steps.length > 0 && <span className="text-stone-400">· {steps.length} {steps.length === 1 ? "action" : "actions"}</span>}
-              {activitySummary.length > 0 && <span className="text-stone-400">· {activitySummary.slice(0, 4).join(", ")}</span>}
-            </button>
+          <div className="space-y-1">
+            {/* Thought section — Devin style */}
+            {thoughtLines.length > 0 && (
+              <ThoughtSection lines={thoughtLines} isStreaming={isStreaming} />
+            )}
 
-            {expandedSteps && (
-              <div className="ml-[6px] pl-5 border-l border-transparent">
-                {message.taskPlan && message.taskPlan.length > 0 && (
-                  <div className="py-1.5">
-                    <div className="relative flex items-center gap-3 text-[13px] font-normal leading-5 text-stone-500">
-                      <ListTodo size={14} strokeWidth={1.5} className="-ml-[22px] bg-white text-stone-400" />
-                      <span>Created {message.taskPlan.length} Tasks</span>
-                      <span className="text-stone-400">{completedTodos}/{message.taskPlan.length}</span>
-                    </div>
-                    <div className="mt-1.5 space-y-0.5">
-                      {message.taskPlan.map((task) => (
-                        <TaskPlanItem key={task.id} task={task} />
-                      ))}
-                    </div>
+            {/* Worked for Xs — collapsible */}
+            {(groupedSteps.length > 0 || (message.taskPlan && message.taskPlan.length > 0)) && (
+              <div>
+                <button
+                  onClick={() => setExpandedSteps(!expandedSteps)}
+                  className="flex items-center gap-1.5 text-[13px] leading-5 transition-colors hover:text-stone-600 group py-[3px]"
+                >
+                  {expandedSteps ? <ChevronDown size={13} strokeWidth={1.5} className="text-stone-400" /> : <ChevronRight size={13} strokeWidth={1.5} className="text-stone-400" />}
+                  <span className={cn(
+                    "transition-colors",
+                    (isStreaming || isWorking) ? "text-stone-700 font-medium" : "text-stone-400"
+                  )}>
+                    {isStreaming || isWorking ? "Working" : "Worked"} for {elapsed}
+                  </span>
+                  {steps.length > 0 && <span className="text-stone-400 text-[12px]">· {steps.length} {steps.length === 1 ? "action" : "actions"}</span>}
+                  {activitySummary.length > 0 && <span className="text-stone-400 text-[12px]">· {activitySummary.slice(0, 3).join(", ")}</span>}
+                </button>
+
+                {expandedSteps && (
+                  <div className="ml-3 pl-4 border-l border-stone-100/60 space-y-0 pb-1">
+                    {/* Streaming edited steps - show files one by one */}
+                    {streamingEdits.length > 0 && (
+                      <div className="py-2">
+                        <StreamingEditedSteps
+                          edits={streamingEdits}
+                          onFileClick={onOpenDiff}
+                          onOpenWorkspace={() => {
+                            // Signal to parent to open workspace panel
+                            const event = new CustomEvent("open-workspace-panel")
+                            window.dispatchEvent(event)
+                          }}
+                          isStreaming={isStreaming}
+                        />
+                      </div>
+                    )}
+
+                    {message.taskPlan && message.taskPlan.length > 0 && (
+                      <div className="py-1.5">
+                        <div className="flex items-center gap-2.5 text-[13px] leading-5 text-stone-500 py-[5px]">
+                          <div className="flex h-4 w-4 shrink-0 items-center justify-center">
+                            <ListTodo size={14} strokeWidth={1.5} className="text-stone-300" />
+                          </div>
+                          <span>Created {message.taskPlan.length} tasks</span>
+                          <span className="text-stone-400 text-[11px]">{completedTodos}/{message.taskPlan.length}</span>
+                        </div>
+                        <div className="ml-6 mt-0.5 space-y-0.5">
+                          {message.taskPlan.map((task) => (
+                            <TaskPlanItem key={task.id} task={task} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {groupedSteps.map((item) => {
+                      if (item.type === 'group' && item.group) {
+                        return <AgentTimelineFileGroup key={item.id} group={item.group} index={item.index} />
+                      } else if (item.type === 'single' && item.step) {
+                        return <AgentTimelineRow key={item.id} step={item.step} index={item.index} onOpenDiff={onOpenDiff} />
+                      }
+                      return null
+                    })}
                   </div>
                 )}
-
-                {thoughtLines.length > 0 && (
-                  <div className="py-2 px-3 bg-gradient-to-br from-purple-50/50 to-blue-50/30 border border-purple-100/60 rounded-lg">
-                    <div className="relative flex items-center gap-2 text-[13px] font-medium leading-5 text-purple-700 mb-2">
-                      <Brain size={16} strokeWidth={2} className={cn("text-purple-500", isStreaming && "animate-pulse")} />
-                      <span>Agent Thinking{isStreaming ? "..." : ""}</span>
-                      {isStreaming && (
-                        <div className="ml-auto flex gap-1">
-                          <div className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                          <div className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                          <div className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-[13px] font-normal leading-6 text-stone-600 space-y-1 max-h-[300px] overflow-y-auto">
-                      {thoughtLines.map((line, index) => (
-                        <div key={`${line}-${index}`} className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: `${index * 50}ms` }}>
-                          <span className="text-purple-400 mr-2">▸</span>{line}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {groupedSteps.length > 0 && groupedSteps.map((item) => {
-                  if (item.type === 'group' && item.group) {
-                    return <AgentTimelineFileGroup key={item.id} group={item.group} index={item.index} />
-                  } else if (item.type === 'single' && item.step) {
-                    return <AgentTimelineRow key={item.id} step={item.step} index={item.index} onOpenDiff={onOpenDiff} />
-                  }
-                  return null
-                })}
               </div>
             )}
           </div>
@@ -500,7 +490,7 @@ export function MessageBubble({ message, isStreaming = false, onOpenDiff }: Mess
           {/* Debug Analysis */}
           {message.debugAnalysis && (
             <div className="w-full max-w-[600px]">
-              <div className="bg-gradient-to-br from-red-50/50 to-orange-50/30 border border-red-100/60 rounded-xl p-3 shadow-sm">
+              <div className="bg-gradient-to-br from-red-50/40 to-orange-50/20 rounded-xl p-3">
                 <div className="flex items-center gap-2 mb-2">
                   <Bug strokeWidth={1.5} className="w-4 h-4 text-red-600" />
                   <span className="text-[13px] font-semibold text-red-900">Error Analysis</span>
@@ -548,10 +538,10 @@ export function MessageBubble({ message, isStreaming = false, onOpenDiff }: Mess
 
           {/* Diff Card */}
           {visibleContent && visibleContent.includes("```diff") && onOpenDiff && (
-            <div className="flex items-center justify-between p-4 bg-stone-50 border border-stone-200/60 rounded-2xl max-w-[500px] shadow-[0_2px_12px_rgba(0,0,0,0.04)] animate-in fade-in slide-in-from-bottom-2 duration-500 transition-all hover:-translate-y-[1px] hover:shadow-[0_4px_20px_rgba(0,0,0,0.06)]">
+            <div className="flex items-center justify-between p-4 bg-stone-50/60 rounded-2xl max-w-[500px] animate-in fade-in slide-in-from-bottom-2 duration-500 transition-all hover:bg-stone-50">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-white border border-stone-200/60 flex items-center justify-center shadow-[0_1px_3px_rgba(0,0,0,0.01)]">
-                  <FileCode size={16} strokeWidth={1.5} className="text-stone-500" />
+                <div className="w-8 h-8 rounded-lg bg-white/80 flex items-center justify-center">
+                  <FileCode size={16} strokeWidth={1.5} className="text-stone-400" />
                 </div>
                 <div className="flex flex-col">
                   <span className="text-[13px] text-stone-800 font-medium">Proposed Changes</span>
@@ -589,10 +579,10 @@ export function MessageBubble({ message, isStreaming = false, onOpenDiff }: Mess
   return (
     <div className="flex w-full justify-end max-w-3xl mx-auto py-4 user-message-enter">
       <div className="flex flex-col items-end gap-1.5 max-w-[85%] md:max-w-[75%]">
-        <div className="rounded-[20px] rounded-br-[6px] bg-[#f4f4f5] text-stone-800 font-normal px-4 py-3 transition-all duration-200 hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)] hover:-translate-y-[1px]">
+        <div className="rounded-[20px] rounded-br-[6px] bg-stone-50/80 text-stone-800 font-normal px-4 py-3 transition-all duration-200">
           <div className="flex flex-col gap-2">
             {message.imageData && (
-              <div className="w-32 h-32 rounded-xl overflow-hidden border border-stone-100 shadow-sm image-bounce">
+              <div className="w-32 h-32 rounded-xl overflow-hidden image-bounce">
                 <Image
                   src={message.imageData || "/placeholder.svg"}
                   alt="Uploaded image"

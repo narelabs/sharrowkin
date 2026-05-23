@@ -8,6 +8,8 @@ import { Composer, type AIModel } from "./composer"
 import { Button } from "@/components/ui/button"
 import { LeftSidebar } from "./left-sidebar"
 import { RightSidebar } from "./right-sidebar"
+import { WorkspacePanel } from "./workspace-panel"
+import { FileDiffViewer } from "./file-diff-viewer"
 
 import { DiffViewer } from "./diff-viewer"
 import { TerminalEmulator } from "./terminal-emulator"
@@ -133,10 +135,8 @@ export interface RuntimeHint {
 
 const DEFAULT_PHASES: AgentPhase[] = [
   { id: "observe", label: "Explore", status: "pending", description: "Understand the workspace" },
-  { id: "recall", label: "Context", status: "pending", description: "Load relevant files" },
-  { id: "reason", label: "Plan", status: "pending", description: "Choose the implementation path" },
-  { id: "stabilize", label: "Verify", status: "pending", description: "Run checks and handle failures" },
-  { id: "commit", label: "Finalize", status: "pending", description: "Prepare patch and summary" },
+  { id: "reason", label: "Plan", status: "pending", description: "Generate patch" },
+  { id: "validate", label: "Verify", status: "pending", description: "Run tests and verify" },
 ]
 
 function normalizePhaseName(phase?: string) {
@@ -177,8 +177,20 @@ export function ChatShell() {
   const [isLoaded, setIsLoaded] = useState(false)
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true)
   const [rightSidebarOpen, setRightSidebarOpen] = useState(true)
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false)
+  const [selectedFile, setSelectedFile] = useState<string>()
+  const [workspaceFiles, setWorkspaceFiles] = useState<Array<{
+    name: string
+    path: string
+    type: "file" | "directory"
+    children?: any[]
+    modified?: boolean
+    additions?: number
+    deletions?: number
+  }>>([])
   const [activeDiffFile, setActiveDiffFile] = useState<string | null>(null)
   const [lastDiffContent, setLastDiffContent] = useState("")
+  const [fileDiffs, setFileDiffs] = useState<Map<string, string>>(new Map()) // Store diff per file
   const [agentState, setAgentState] = useState<AgentState>({ status: "idle", message: "Workspace ready" })
   const [agentPhases, setAgentPhases] = useState<AgentPhase[]>(DEFAULT_PHASES)
   const [projectIntelligence, setProjectIntelligence] = useState<ProjectIntelligence>({ status: "unknown" })
@@ -349,6 +361,15 @@ export function ChatShell() {
     document.addEventListener("mousemove", doDrag)
     document.addEventListener("mouseup", stopDrag)
   }, [terminalHeight])
+
+  // Listen for workspace panel open event
+  useEffect(() => {
+    const handleOpenWorkspace = () => {
+      setWorkspacePanelOpen(true)
+    }
+    window.addEventListener("open-workspace-panel", handleOpenWorkspace)
+    return () => window.removeEventListener("open-workspace-panel", handleOpenWorkspace)
+  }, [])
 
   // Load messages from localStorage on mount and when active session changes
   useEffect(() => {
@@ -606,7 +627,7 @@ export function ChatShell() {
           }))
           
           updateSteps([
-            { id: "observe", name: "Exploring repository", status: "running", description: "Reading project files and structure." }
+            { id: "observe", name: "Exploring repository", status: "running", description: "Reading project files and structure" }
           ])
           setAgentState({ status: "running", phase: "observe", message: "Observing workspace", startedAt: new Date(startedAtRef.current || Date.now()).toISOString(), updatedAt: new Date().toISOString() })
           setPhaseStatus("observe", "running", "Scanning active project files")
@@ -625,14 +646,12 @@ export function ChatShell() {
               // Update tool steps based on phase
               const phaseNames: Record<string, string> = {
                 observe: "Exploring repository",
-                recall: "Reading context",
                 reason: "Planning changes",
-                stabilize: "Running checks",
-                commit: "Finalizing response"
+                validate: "Running verification",
               }
               
               const currentPhaseKey = data.phase
-              const allKeys = ["observe", "recall", "reason", "stabilize", "commit"]
+              const allKeys = ["observe", "reason", "validate"]
 
               updateSteps(currentSteps.map((step) => (
                 (allKeys.includes(step.id) || step.id.startsWith("phase-")) && step.status === "running"
@@ -640,7 +659,7 @@ export function ChatShell() {
                   : step
               )))
               appendStep({ id: currentPhaseKey, name: phaseNames[currentPhaseKey] || currentPhaseKey, status: "running", description: data.message || "Working" })
-              setAgentState((prev) => ({ ...prev, status: currentPhaseKey === "stabilize" ? "stabilizing" : "running", phase: currentPhaseKey, message: phaseNames[currentPhaseKey] || "Working", updatedAt: new Date().toISOString(), runtimeMs: startedAtRef.current ? Date.now() - startedAtRef.current : prev.runtimeMs }))
+              setAgentState((prev) => ({ ...prev, status: currentPhaseKey === "validate" ? "stabilizing" : "running", phase: currentPhaseKey, message: phaseNames[currentPhaseKey] || "Working", updatedAt: new Date().toISOString(), runtimeMs: startedAtRef.current ? Date.now() - startedAtRef.current : prev.runtimeMs }))
               setPhaseStatus(currentPhaseKey, "running", data.message || "Working")
               appendToolActivity({ name: phaseNames[currentPhaseKey] || currentPhaseKey, status: "running", message: data.message || "Phase transition" })
               setTerminalLines(prev => [...prev, `➔ Transitioned to phase: ${data.phase.toUpperCase()}`])
@@ -656,7 +675,7 @@ export function ChatShell() {
               }))
               setAgentState((prev) => ({ ...prev, status: "thinking", message: thinkingText.slice(0, 120) || "Reasoning", updatedAt: new Date().toISOString(), runtimeMs: startedAtRef.current ? Date.now() - startedAtRef.current : prev.runtimeMs }))
               appendToolActivity({ name: "Reasoning", status: "running", message: thinkingText.slice(0, 180) })
-              appendStep({ id: "thinking-live", name: "Thinking through the next step", status: "running", description: thinkingText.slice(0, 180) })
+              appendStep({ id: "thinking-live", name: "Thinking", status: "running", description: thinkingText.slice(0, 180) })
               setTerminalLines(prev => [...prev, `💭 ${thinkingText}`])
 
             } else if (data.type === "task_plan") {
@@ -670,7 +689,7 @@ export function ChatShell() {
                 return msg
               }))
               appendToolActivity({ name: "Execution plan", status: "done", message: `${plan.length} top-level tasks` })
-              appendStep({ id: "todos-created", name: `Created ${plan.length} todos`, status: "done", description: "Execution plan ready" })
+              appendStep({ id: "todos-created", name: `Created ${plan.length} tasks`, status: "done", description: "Execution plan ready" })
               setTerminalLines(prev => [...prev, `📋 Execution plan generated: ${plan.length} top-level tasks`])
 
             } else if (data.type === "task_update") {
@@ -699,8 +718,9 @@ export function ChatShell() {
               }))
 
             } else if (data.type === "log") {
-              appendToolActivity({ name: data.tag || data.level || "log", status: data.level === "error" ? "error" : "done", message: data.message })
-              appendStep({ name: data.tag || "Agent event", status: data.level === "error" ? "error" : "done", description: data.message })
+              const logName = data.tag && data.tag !== "info" && data.tag !== "log" ? data.tag : (data.message?.split(":")[0]?.slice(0, 60) || "Agent")
+              appendToolActivity({ name: logName, status: data.level === "error" ? "error" : "done", message: data.message })
+              appendStep({ name: logName, status: data.level === "error" ? "error" : "done", description: data.message })
               setTerminalLines(prev => [...prev, `[${data.level?.toUpperCase() || 'INFO'}] ${data.message}`])
 
             } else if (data.type === "debug_analysis") {
@@ -750,6 +770,33 @@ export function ChatShell() {
                 }
               }
               setLastDiffContent(diffText)
+
+              // Parse and store diff for each file
+              const newFileDiffs = new Map<string, string>()
+              const lines = diffText.split("\n")
+              let currentFileName = ""
+              let currentFileDiff: string[] = []
+
+              for (const line of lines) {
+                if (line.startsWith("diff --git")) {
+                  // Save previous file's diff
+                  if (currentFileName && currentFileDiff.length > 0) {
+                    newFileDiffs.set(currentFileName, currentFileDiff.join("\n"))
+                  }
+                  // Start new file
+                  const match = line.match(/diff --git a\/(.+?) b\/(.+)/)
+                  currentFileName = match ? match[2] : ""
+                  currentFileDiff = [line]
+                } else if (currentFileName) {
+                  currentFileDiff.push(line)
+                }
+              }
+              // Save last file
+              if (currentFileName && currentFileDiff.length > 0) {
+                newFileDiffs.set(currentFileName, currentFileDiff.join("\n"))
+              }
+              setFileDiffs(newFileDiffs)
+
               if (planMode === "autonomous") {
                 setDiffStatus({ filename: "agent-patch.diff", status: "accepted", filesChanged, additions, deletions })
               } else {
@@ -806,10 +853,14 @@ export function ChatShell() {
                 summary: data.summary || prev.summary,
               }))
               appendToolActivity({ name: "Project intelligence", status: data.status === "error" ? "error" : "done", message: data.summary || data.status })
+              const wsPath = data.workspace_path || data.workspacePath || ""
+              const projectName = wsPath ? wsPath.split(/[\\/]/).filter(Boolean).pop() || wsPath : "project"
+              const filesCount = typeof data.files_indexed === "number" ? data.files_indexed : 0
+              const linesCount = typeof data.lines_indexed === "number" ? data.lines_indexed : 0
               appendStep({
-                name: data.summary || (typeof data.files_indexed === "number" ? `Explored ${data.files_indexed} files` : "Explored project"),
+                name: `Explored ${filesCount} files, ${linesCount.toLocaleString()} lines`,
                 status: data.status === "error" ? "error" : "done",
-                description: data.workspace_path || data.workspacePath || data.status,
+                description: projectName,
               })
 
             } else if (data.type === "tool_activity") {
@@ -1017,6 +1068,40 @@ export function ChatShell() {
     setIsStreaming(false)
   }, [appendToolActivity])
 
+  // Extract diff for specific file from full diff
+  const getFileDiff = useCallback((filename: string, fullDiff: string): string => {
+    if (!fullDiff) return ""
+
+    const lines = fullDiff.split("\n")
+    const fileDiffLines: string[] = []
+    let inTargetFile = false
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+
+      // Check if this is the start of our target file
+      if (line.startsWith("diff --git") && line.includes(filename)) {
+        inTargetFile = true
+        fileDiffLines.push(line)
+        continue
+      }
+
+      // Check if we've moved to a different file
+      if (line.startsWith("diff --git") && !line.includes(filename)) {
+        if (inTargetFile) break // We've collected all lines for our file
+        inTargetFile = false
+        continue
+      }
+
+      // Collect lines while we're in the target file
+      if (inTargetFile) {
+        fileDiffLines.push(line)
+      }
+    }
+
+    return fileDiffLines.join("\n")
+  }, [])
+
   const clearChat = useCallback(() => {
     setMessages([])
     setError(null)
@@ -1028,6 +1113,19 @@ export function ChatShell() {
     <div className="h-dvh bg-white flex overflow-hidden text-stone-900">
       {/* Left Sidebar */}
       <LeftSidebar isOpen={leftSidebarOpen} onToggle={() => setLeftSidebarOpen(!leftSidebarOpen)} />
+
+      {/* Workspace Panel - opens when user clicks on edited file */}
+      {workspacePanelOpen && workspaceFiles.length > 0 && (
+        <WorkspacePanel
+          files={workspaceFiles}
+          onFileClick={(path) => {
+            setSelectedFile(path)
+            setActiveDiffFile(path)
+          }}
+          selectedFile={selectedFile}
+          className="w-64 shrink-0"
+        />
+      )}
 
       {/* Main Workspace split */}
       <div className="flex-1 flex overflow-hidden relative">
@@ -1077,9 +1175,9 @@ export function ChatShell() {
                 setTerminalDock("bottom")
                 setIsDraggingTerminal(false)
               }}
-              className="mx-6 my-3 h-[180px] border-2 border-dashed border-emerald-400/60 bg-emerald-50/10 rounded-2xl flex flex-col items-center justify-center gap-2.5 cursor-pointer transition-all hover:border-emerald-500 hover:bg-emerald-50/20 animate-pulse shrink-0"
+              className="mx-6 my-3 h-[180px] border border-dashed border-emerald-300/40 bg-emerald-50/5 rounded-2xl flex flex-col items-center justify-center gap-2.5 cursor-pointer transition-all hover:border-emerald-400/60 hover:bg-emerald-50/10 animate-pulse shrink-0"
             >
-              <div className="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 shadow-sm mb-1">
+              <div className="w-10 h-10 rounded-full bg-emerald-50/60 flex items-center justify-center text-emerald-500 mb-1">
                 <ArrowDownToLine size={18} strokeWidth={1.5} className="animate-bounce" />
               </div>
               <h4 className="text-[13px] font-medium text-emerald-800 font-sans">Drop here to Dock Terminal</h4>
@@ -1094,7 +1192,7 @@ export function ChatShell() {
             <div 
               style={{ height: `${terminalHeight}px` }}
               className={cn(
-                "border-t border-stone-200/60 bg-white px-6 pb-4 pt-5 shrink-0 relative flex flex-col min-h-0",
+                "border-t border-stone-100/40 bg-white px-6 pb-4 pt-5 shrink-0 relative flex flex-col min-h-0",
                 isResizingTerminal ? "transition-none" : "transition-all duration-300 ease-in-out"
               )}
             >
@@ -1126,7 +1224,7 @@ export function ChatShell() {
             </div>
           )}
 
-          <div className="flex-shrink-0 border-t border-stone-200/60">
+          <div className="flex-shrink-0">
             <Composer
                onSend={sendMessage}
                onStop={stopStreaming}
@@ -1143,10 +1241,10 @@ export function ChatShell() {
 
         {/* Diff Viewer panel */}
         {activeDiffFile && (
-          <div className="w-1/2 border-l border-stone-200/60 bg-white flex flex-col overflow-hidden animate-in slide-in-from-right duration-300">
+          <div className="w-1/2 border-l border-stone-100/30 bg-white flex flex-col overflow-hidden animate-in slide-in-from-right duration-300">
             <DiffViewer
               filename={activeDiffFile}
-              diffContent={lastDiffContent}
+              diffContent={fileDiffs.get(activeDiffFile) || getFileDiff(activeDiffFile, lastDiffContent)}
               onClose={() => setActiveDiffFile(null)}
               onAccept={() => {
                 setDiffStatus((prev) => ({ ...prev, status: "accepted" }))

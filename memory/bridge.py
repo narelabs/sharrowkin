@@ -22,11 +22,11 @@ from config.settings import AgentConfig, load_config
 
 
 class MemoryBridge:
-    def __init__(self, workspace: Path, config: AgentConfig | None = None) -> None:
-        self.workspace = workspace
+    def __init__(self, workspace: Path | str, config: AgentConfig | None = None) -> None:
+        self.workspace = Path(workspace) if isinstance(workspace, str) else workspace
         self.config = config or load_config()
         # Ensure base .sharrowkin is used, but paths can be overridden
-        self.memory_dir = workspace / ".sharrowkin"
+        self.memory_dir = self.workspace / ".sharrowkin"
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self.disabled_reason = ""
         self.rld = None
@@ -138,9 +138,11 @@ class MemoryBridge:
                 gene = activated.gene
                 # Use task_context instead of pattern (ReasoningGene attribute)
                 pattern = gene.task_context if hasattr(gene, 'task_context') else str(gene)
+                # Use stats.success_rate instead of calculating manually
+                success_rate = gene.stats.success_rate if hasattr(gene, 'stats') else 0.5
                 rld_genes.append({
                     "pattern": pattern,
-                    "success_rate": gene.success_count / max(1, gene.activation_count),
+                    "success_rate": success_rate,
                     "tools": gene.tools_used,
                     "weight": activated.weight
                 })

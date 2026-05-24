@@ -851,12 +851,51 @@ class SharrowkinAgent:
                 if success:
                     async for event in self._commit(state, memory):
                         yield event
-                    if state.last_rationale:
-                        yield {"type": "content", "content": state.last_rationale}
-                        # ✅ SAVE AGENT RESPONSE TO CONVERSATION HISTORY
-                        self.conversation_history.append({"role": "assistant", "content": state.last_rationale})
-                        if len(self.conversation_history) > 20:
-                            self.conversation_history = self.conversation_history[-20:]
+
+                    # ✅ ASK LLM TO SUMMARIZE ITS OWN WORK
+                    if self.gemini.configured:
+                        try:
+                            summary_prompt = f"""Ты только что выполнил задачу. Подведи итоги своей работы.
+
+Задача: {state.task}
+
+Что было сделано:
+{chr(10).join(f"- {action}" for action in state.actions)}
+
+Изменённые файлы: {', '.join(state.current_changed_files) if state.current_changed_files else 'нет'}
+
+Использованные инструменты: {', '.join(list(dict.fromkeys(state.tools_used)))}
+
+Результат работы:
+{state.last_rationale if state.last_rationale else 'Изменения применены'}
+
+Напиши краткий отчёт (2-4 предложения) о том, что ты сделал и какой результат получился.
+Используй формат:
+## ✅ Задача выполнена
+[твой отчёт]"""
+
+                            summary = await self.gemini.generate_text(
+                                summary_prompt,
+                                "Ты Sharrowkin агент. Подведи итоги своей работы кратко и по делу."
+                            )
+
+                            yield {"type": "content", "content": summary}
+                            # ✅ SAVE SUMMARY TO CONVERSATION HISTORY
+                            self.conversation_history.append({"role": "assistant", "content": summary})
+                            if len(self.conversation_history) > 20:
+                                self.conversation_history = self.conversation_history[-20:]
+                        except Exception as e:
+                            print(f"[AGENT] Summary generation failed: {e}")
+                            # Fallback to simple message
+                            fallback = f"## ✅ Задача выполнена\n\n{state.last_rationale if state.last_rationale else 'Изменения применены успешно.'}"
+                            yield {"type": "content", "content": fallback}
+                            self.conversation_history.append({"role": "assistant", "content": fallback})
+                    else:
+                        # No LLM configured - use simple summary
+                        simple_summary = f"## ✅ Задача выполнена\n\nИзменено файлов: {len(state.current_changed_files)}"
+                        yield {"type": "content", "content": simple_summary}
+                        self.conversation_history.append({"role": "assistant", "content": simple_summary})
+
                     yield self._status("done")
                     yield self._log("success", "Task stabilized and stored in local memory.")
                 else:

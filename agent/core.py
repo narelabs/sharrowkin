@@ -1537,9 +1537,18 @@ Use format:
                 memory_context_enriched += "\n\n=== REASONING PATTERNS (RLD Genes) ===\n"
                 # Limit to top 3 genes (was unlimited)
                 for gene in rld_genes[:3]:
-                    success_rate = gene.get('success_rate', 0)
-                    memory_context_enriched += f"- Pattern: {gene['pattern']} (success rate: {success_rate:.1%})\n"
-                    memory_context_enriched += f"  Tools: {', '.join(gene['tools'][:5])}\n"  # Limit tools
+                    # gene is a ReasoningGene object, not a dict
+                    if hasattr(gene, 'task_context'):
+                        success_rate = gene.stats.success_rate if hasattr(gene, 'stats') else 0
+                        memory_context_enriched += f"- Pattern: {gene.task_context[:100]} (success rate: {success_rate:.1%})\n"
+                        memory_context_enriched += f"  Tools: {', '.join(gene.tools_used[:5])}\n"  # Limit tools
+                    else:
+                        # Fallback for dict format
+                        success_rate = gene.get('success_rate', 0)
+                        pattern = gene.get('task_context', gene.get('pattern', 'unknown'))
+                        memory_context_enriched += f"- Pattern: {pattern[:100]} (success rate: {success_rate:.1%})\n"
+                        tools = gene.get('tools_used', gene.get('tools', []))
+                        memory_context_enriched += f"  Tools: {', '.join(tools[:5])}\n"
 
         # Combine all context
         full_context = workspace_summary_enriched

@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sharrowkin — Autonomous Dev Agent</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: white;
+            margin: 0;
+            overflow-x: hidden;
+        }
+
+        /* Custom Animations */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeInOverlay {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes fadeInDialog {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        @keyframes shimmer {
+            0% { background-position: -1000px 0; }
+            100% { background-position: 1000px 0; }
+        }
+
+        @keyframes gradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .animate-fade-in-up {
+            animation: fadeInUp 0.6s ease-out forwards;
+        }
+
+        .animate-fade-in-overlay {
+            animation: fadeInOverlay 0.4s ease-out forwards;
+        }
+
+        .animate-slide-up-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            animation: fadeInDialog 0.5s ease-out forwards;
+        }
+
+        .bg-clip-text {
+            -webkit-background-clip: text;
+            background-clip: text;
+        }
+
+        /* WOW Effects */
+        .hover-lift {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .hover-lift:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
+        }
+
+        .gradient-border {
+            position: relative;
+            background: white;
+        }
+
+        .gradient-border::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            padding: 1px;
+            background: linear-gradient(135deg, #F26522, #ff8c42, #F26522);
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .gradient-border:hover::before {
+            opacity: 1;
+        }
+
+        .shimmer-effect {
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            background-size: 200% 100%;
+            animation: shimmer 2s infinite;
+        }
+
+        .animated-gradient {
+            background: linear-gradient(-45deg, #F26522, #ff8c42, #F26522, #e05a1a);
+            background-size: 400% 400%;
+            animation: gradient 3s ease infinite;
+        }
+
+        .glow-on-hover {
+            transition: box-shadow 0.3s ease;
+        }
+
+        .glow-on-hover:hover {
+            box-shadow: 0 0 20px rgba(242, 101, 34, 0.4);
+        }
+
+        .scale-on-hover {
+            transition: transform 0.3s ease;
+        }
+
+        .scale-on-hover:hover {
+            transform: scale(1.02);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const Icon = ({ name, className, fill = "none" }) => {
+            useEffect(() => {
+                lucide.createIcons();
+            }, [name]);
+            return <i data-lucide={name} className={className} style={{ fill: fill }}></i>;
+        };
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('observe');
+            const tabs = [
+                { id: 'observe', label: 'Observe', icon: 'Search' },
+                { id: 'recall', label: 'Recall', icon: 'Brain' },
+                { id: 'reason', label: 'Reason', icon: 'Lightbulb' },
+                { id: 'stabilize', label: 'Stabilize', icon: 'Shield' }
+            ];
+
+            useEffect(() => {
+                const interval = setInterval(() => {
+                    setActiveTab((prev) => {
+                        const currentIndex = tabs.findIndex(t => t.id === prev);
+                        return tabs[(currentIndex + 1) % tabs.length].id;
+                    });
+                }, 4000);
+                return () => clearInterval(interval);
+            }, []);
+
+            return (
+                <div className="max-w-7xl mx-auto">
+                    {/* NAVIGATION */}
+                    <nav className="px-6 py-4 flex items-center justify-between animate-fade-in-up" style={{ opacity: 0, animationDelay: '0.1s' }}>
+                        <div className="flex items-center gap-2">
+                            <div className="w-5 h-5 bg-black rounded-sm flex items-center justify-center">
+                                <Icon name="Cpu" className="w-3 h-3 text-white" fill="white" />
+                            </div>
+                            <span className="text-lg font-semibold tracking-tight text-black">Sharrowkin</span>
+                        </div>
+
+                        <div className="hidden md:flex items-center gap-8">
+                            <a href="#" className="text-sm text-gray-700 hover:text-black flex items-center gap-1">Solutions <Icon name="ChevronDown" className="w-4 h-4" /></a>
+                            <a href="#" className="text-sm text-gray-700 hover:text-black flex items-center gap-1">For Teams <Icon name="ChevronDown" className="w-4 h-4" /></a>
+                            <a href="#" className="text-sm text-gray-700 hover:text-black">About Us</a>
+                            <a href="#" className="text-sm text-gray-700 hover:text-black">Learn Hub</a>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                            <a href="#" className="text-sm text-gray-700 font-medium">Login</a>
+                            <button className="bg-black text-white px-5 py-2.5 rounded-full text-sm font-medium hover:bg-gray-800 transition-colors">
+                                Get started free
+                            </button>
+                        </div>
+                    </nav>
+
+                    {/* HERO SECTION */}
+                    <section className="px-6 pt-24 pb-32 text-center">
+                        {/* Reviews Badge */}
+                        <div className="inline-flex items-center gap-2 mb-8 animate-fade-in-up" style={{ opacity: 0, animationDelay: '0.2s' }}>
+                            <div className="w-6 h-6 border border-gray-300 rounded flex items-center justify-center">
+                                <Icon name="Star" className="w-3.5 h-3.5 text-black" fill="black" />
+                            </div>
+                            <span className="text-sm font-medium text-black">4.9 rating from 5.2K+ engineering teams</span>
+                        </div>
+
+                        {/* Main Heading */}
+                        <h1 className="text-6xl md:text-7xl lg:text-[80px] font-normal leading-[1.1] tracking-tight mb-5 animate-fade-in-up" style={{ opacity: 0, animationDelay: '0.3s' }}>
+                            Work Smarter. Move Faster.<br />
+                            <span className="bg-gradient-to-r from-black via-gray-500 to-gray-400 bg-clip-text text-transparent">
+                                AI Powers You Up.
+                            </span>
+                        </h1>
+
+                        {/* Subheading */}
+                        <p className="text-lg md:text-xl text-gray-600 mb-8 max-w-2xl mx-auto animate-fade-in-up" style={{ opacity: 0, animationDelay: '0.4s' }}>
+                            Intelligent automation syncs with the tools you love to streamline tasks, boost output, and save time.
+                        </p>
+
+                        {/* CTA */}
+                        <button className="animated-gradient glow-on-hover text-white px-8 py-3 rounded-full text-base font-medium transition-all mb-12 animate-fade-in-up" style={{ opacity: 0, animationDelay: '0.5s' }}>
+                            Begin Free Trial
+                        </button>
+
+                        {/* Tab Bar */}
+                        <div className="max-w-xl mx-auto mb-12 animate-fade-in-up" style={{ opacity: 0, animationDelay: '0.6s' }}>
+                            <div className="bg-gray-100 rounded-lg p-1">
+                                <div className="grid grid-cols-2 gap-1 md:hidden">
+                                    {tabs.map((tab) => (
+                                        <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                                            className={`flex items-center justify-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === tab.id ? 'bg-white text-black shadow-sm' : 'text-gray-600'}`}>
+                                            <Icon name={tab.icon} className="w-4 h-4" /> {tab.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="hidden md:flex items-center justify-between">
+                                    {tabs.map((tab, idx) => (
+                                        <React.Fragment key={tab.id}>
+                                            <button onClick={() => setActiveTab(tab.id)}
+                                                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-md text-sm font-medium transition-all ${activeTab === tab.id ? 'bg-white text-black shadow-sm' : 'text-gray-600 hover:text-black'}`}>
+                                                <Icon name={tab.icon} className="w-4 h-4" /> {tab.label}
+                                            </button>
+                                            {idx < tabs.length - 1 && <div className="w-px h-5 bg-gray-300 mx-1"></div>}
+                                        </React.Fragment>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Video + Overlay Section */}
+                        <div className="relative rounded-3xl overflow-hidden h-[400px] md:h-[500px] animate-fade-in-up bg-gray-50" style={{ opacity: 0, animationDelay: '0.7s' }}>
+                            <video key="hero-video" className="w-full h-full object-cover" autoPlay loop muted playsInline>
+                                <source src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260319_165750_358b1e72-c921-48b7-aaac-f200994f32fb.mp4" type="video/mp4" />
+                            </video>
+
+                            <div className="absolute inset-0 bg-black/10 animate-fade-in-overlay">
+                                {activeTab === 'observe' && (
+                                    <div className="animate-slide-up-overlay bg-white p-6 rounded-2xl shadow-2xl w-[320px] text-left">
+                                        <h4 className="font-semibold mb-4 text-gray-900 flex items-center gap-2">
+                                            <Icon name="Search" className="w-4 h-4" /> Workspace Analysis
+                                        </h4>
+                                        <div className="space-y-4">
+                                            <div className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden">
+                                                <div className="bg-purple-600 h-full w-1/4"></div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {['Building Semantic Graph', 'Analyzing Dependencies', 'Routing Memory', 'Loading Context'].map((txt, i) => (
+                                                    <div key={i} className="flex items-center gap-3">
+                                                        <div className={`w-4 h-4 rounded-full border ${i === 0 ? 'bg-purple-600 border-purple-600' : 'border-gray-300'}`}></div>
+                                                        <span className="text-xs text-gray-600 font-medium">{txt}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {activeTab === 'recall' && (
+                                    <div className="animate-slide-up-overlay bg-white p-6 rounded-2xl shadow-2xl w-[320px] text-left">
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h4 className="font-semibold text-gray-900">Memory Retrieval</h4>
+                                            <span className="text-orange-500 text-xs font-bold bg-orange-50 px-2 py-1 rounded">Active</span>
+                                        </div>
+                                        <div className="space-y-3">
+                                            <div className="flex items-center justify-between text-xs">
+                                                <span className="text-gray-600">TraceMemory</span>
+                                                <span className="font-mono text-green-600">2 solutions</span>
+                                            </div>
+                                            <div className="flex items-center justify-between text-xs">
+                                                <span className="text-gray-600">RLD Patterns</span>
+                                                <span className="font-mono text-green-600">3 genes</span>
+                                            </div>
+                                            <div className="flex items-center justify-between text-xs">
+                                                <span className="text-gray-600">MemoryField</span>
+                                                <span className="font-mono text-green-600">5 hints</span>
+                                            </div>
+                                            <div className="flex items-center justify-between text-xs">
+                                                <span className="text-gray-600">DSM Segments</span>
+                                                <span className="font-mono text-green-600">10 nodes</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {activeTab === 'reason' && (
+                                    <div className="animate-slide-up-overlay bg-white p-8 rounded-2xl shadow-2xl w-[300px] text-center">
+                                        <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                                            <Icon name="Lightbulb" className="w-8 h-8 text-blue-500" />
+                                        </div>
+                                        <h4 className="font-bold text-xl mb-1 text-gray-900">Code Generation</h4>
+                                        <p className="text-gray-500 text-sm mb-4">Claude Opus 4.6</p>
+                                        <div className="text-3xl font-mono font-bold text-blue-600">RUNNING</div>
+                                        <div className="text-[10px] uppercase tracking-widest text-gray-400 mt-2">Context: 246KB loaded</div>
+                                    </div>
+                                )}
+
+                                {activeTab === 'stabilize' && (
+                                    <div className="animate-slide-up-overlay bg-white p-6 rounded-2xl shadow-2xl w-[320px] text-left">
+                                        <h4 className="font-semibold mb-4 text-gray-900">Test & Validate</h4>
+                                        <div className="space-y-3 mb-6">
+                                            {['Running pytest suite', 'Analyzing failures', 'Auto-correcting errors', 'All tests passed'].map((text, i) => (
+                                                <div key={i} className="flex items-center gap-3">
+                                                    <Icon name="CheckCircle2" className="w-4 h-4 text-green-500" />
+                                                    <span className="text-sm text-gray-600">{text}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <button className="w-full bg-black text-white py-2.5 rounded-xl font-medium text-sm">
+                                            Commit Changes
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Company Logos */}
+                        <div className="mt-24 flex flex-wrap items-center justify-center gap-x-12 gap-y-8 opacity-0 animate-fade-in-up" style={{ animationDelay: '0.8s' }}>
+                            <span className="font-bold text-xl tracking-tighter text-gray-400">GITHUB</span>
+                            <div className="flex items-center gap-1 font-bold text-xl text-gray-400">
+                                <Icon name="Hash" className="w-5 h-5" /> SLACK
+                            </div>
+                            <div className="flex items-center gap-1 text-gray-400">
+                                <div className="grid grid-cols-2 gap-0.5">
+                                    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                                    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                                    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                                    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full"></div>
+                                </div>
+                                <span className="font-semibold text-lg">Linear</span>
+                            </div>
+                            <span className="font-serif italic text-2xl text-gray-400 font-bold">Vercel</span>
+                            <div className="flex items-center gap-2 text-gray-400 font-medium">
+                                <div className="w-8 h-8 border-2 border-gray-400 rounded-full flex items-center justify-center text-[10px] font-bold">AWS</div>
+                                <span className="tracking-widest text-sm">AMAZON</span>
+                            </div>
+                            <div className="flex items-center gap-1 text-gray-400">
+                                <span className="font-bold text-xl tracking-tight">PostHog</span>
+                                <div className="flex gap-0.5 mb-2">
+                                    <div className="w-1 h-1 bg-gray-400 rounded-full"></div>
+                                    <div className="w-1 h-1 bg-gray-400 rounded-full"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* FEATURES SECTION */}
+                    <section className="bg-white pt-16 sm:pt-20 lg:pt-32 pb-12 sm:pb-16 lg:pb-24 overflow-hidden">
+                        <div className="max-w-[1440px] mx-auto px-5 sm:px-8 lg:px-12">
+                            <div className="flex items-center gap-3 mb-6 sm:mb-8">
+                                <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-gray-900 text-white flex items-center justify-center text-[11px] sm:text-[12px] font-semibold">1</div>
+                                <div className="text-[12px] sm:text-[13px] font-medium border border-gray-200 rounded-full px-3 sm:px-4 py-1 sm:py-1.5">Introducing Sharrowkin</div>
+                            </div>
+
+                            <h2 className="mb-12 sm:mb-16 lg:mb-20" style={{ fontSize: 'clamp(1.5rem, 4vw, 3.2rem)', fontWeight: 500, lineHeight: 1.12, letterSpacing: '-0.02em', color: '#111' }}>
+                                Strategy-led AI agent, delivering<br className="hidden sm:block" /><span className="sm:hidden"> </span>results in development and beyond.
+                            </h2>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
+                                <div className="hover-lift gradient-border p-6 rounded-2xl bg-white">
+                                    <div className="w-12 h-12 bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl flex items-center justify-center mb-4">
+                                        <Icon name="Brain" className="w-6 h-6 text-blue-600" />
+                                    </div>
+                                    <h3 className="text-[16px] font-semibold mb-2">4 Memory Systems</h3>
+                                    <p className="text-[13px] sm:text-[14px] text-gray-600 leading-relaxed">DSM, RLD, MemoryField, and TraceMemory work together to learn from past solutions.</p>
+                                </div>
+
+                                <div className="hover-lift gradient-border p-6 rounded-2xl bg-white">
+                                    <div className="w-12 h-12 bg-gradient-to-br from-green-50 to-green-100 rounded-xl flex items-center justify-center mb-4">
+                                        <Icon name="GitBranch" className="w-6 h-6 text-green-600" />
+                                    </div>
+                                    <h3 className="text-[16px] font-semibold mb-2">Semantic Code Graph</h3>
+                                    <p className="text-[13px] sm:text-[14px] text-gray-600 leading-relaxed">AST-level analysis with dependency tracking and architectural pattern recognition.</p>
+                                </div>
+
+                                <div className="hover-lift gradient-border p-6 rounded-2xl bg-white">
+                                    <div className="w-12 h-12 bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl flex items-center justify-center mb-4">
+                                        <Icon name="Zap" className="w-6 h-6 text-purple-600" />
+                                    </div>
+                                    <h3 className="text-[16px] font-semibold mb-2">Self-Correction Loop</h3>
+                                    <p className="text-[13px] sm:text-[14px] text-gray-600 leading-relaxed">Automatically detects and fixes errors with max 3 retry attempts.</p>
+                                </div>
+
+                                <div className="hover-lift gradient-border p-6 rounded-2xl bg-white">
+                                    <div className="w-12 h-12 bg-gradient-to-br from-orange-50 to-orange-100 rounded-xl flex items-center justify-center mb-4">
+                                        <Icon name="Network" className="w-6 h-6 text-orange-600" />
+                                    </div>
+                                    <h3 className="text-[16px] font-semibold mb-2">Task Decomposition</h3>
+                                    <p className="text-[13px] sm:text-[14px] text-gray-600 leading-relaxed">HierarchicalPlanner breaks complex tasks into subtasks with progress tracking.</p>
+                                </div>
+
+                                <div className="hover-lift gradient-border p-6 rounded-2xl bg-white">
+                                    <div className="w-12 h-12 bg-gradient-to-br from-red-50 to-red-100 rounded-xl flex items-center justify-center mb-4">
+                                        <Icon name="Shield" className="w-6 h-6 text-red-600" />
+                                    </div>
+                                    <h3 className="text-[16px] font-semibold mb-2">Failure Analysis</h3>
+                                    <p className="text-[13px] sm:text-[14px] text-gray-600 leading-relaxed">Root cause detection with confidence scoring and suggested fixes.</p>
+                                </div>
+
+                                <div className="hover-lift gradient-border p-6 rounded-2xl bg-white">
+                                    <div className="w-12 h-12 bg-gradient-to-br from-indigo-50 to-indigo-100 rounded-xl flex items-center justify-center mb-4">
+                                        <Icon name="MessageSquare" className="w-6 h-6 text-indigo-600" />
+                                    </div>
+                                    <h3 className="text-[16px] font-semibold mb-2">Conversation Memory</h3>
+                                    <p className="text-[13px] sm:text-[14px] text-gray-600 leading-relaxed">Maintains context across sessions, never forgets what you discussed.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* HOW IT WORKS */}
+                    <section className="bg-[#F5F5F5] pt-16 sm:pt-20 lg:pt-28 pb-16 sm:pb-20 lg:pb-28">
+                        <div className="max-w-[1440px] mx-auto">
+                            <div className="px-5 sm:px-8 lg:px-12 flex items-center gap-3 mb-6 sm:mb-8">
+                                <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-gray-900 text-white flex items-center justify-center text-[11px] sm:text-[12px] font-semibold">2</div>
+                                <div className="text-[12px] sm:text-[13px] font-medium border border-gray-300 rounded-full px-3 sm:px-4 py-1 sm:py-1.5">Featured capabilities</div>
+                            </div>
+
+                            <h2 className="px-5 sm:px-8 lg:px-12 mb-10 sm:mb-14 lg:mb-16" style={{ fontSize: 'clamp(1.75rem, 7vw, 4.2rem)', fontWeight: 500, lineHeight: 1.08, letterSpacing: '-0.03em', color: '#111' }}>
+                                Our capabilities
+                            </h2>
+
+                            <div className="px-5 sm:px-8 lg:px-12 grid grid-cols-1 md:grid-cols-2 gap-5 sm:gap-6 lg:gap-7">
+                                {/* Card 1 */}
+                                <div className="group cursor-pointer scale-on-hover">
+                                    <div className="relative rounded-2xl overflow-hidden bg-[#1a1d2e]" style={{ aspectRatio: '329/246' }}>
+                                        <video className="w-full h-full object-cover" autoPlay muted loop playsInline>
+                                            <source src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260516_122702_390f5305-8719-41d5-ae80-d23ab3796c28.mp4" type="video/mp4" />
+                                        </video>
+                                        <div className="absolute bottom-4 left-4 h-9 bg-white rounded-full flex items-center overflow-hidden transition-all duration-300 ease-in-out group-hover:w-[148px]" style={{ width: '36px' }}>
+                                            <div className="flex items-center gap-2 px-3">
+                                                <span className="text-[13px] font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-100">Learn more</span>
+                                                <svg className="w-[14px] h-[14px] flex-shrink-0 transition-transform duration-300 -rotate-45 group-hover:rotate-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                                                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                                                </svg>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <p className="text-[13px] sm:text-[14px] text-gray-600 mt-4 leading-relaxed">Winner of Site of the Month 2025 - an interactive 3D showcase driving record engagement</p>
+                                    <h3 className="text-[14px] sm:text-[15px] font-semibold text-gray-900 mt-1">5-Phase Reasoning</h3>
+                                </div>
+
+                                {/* Card 2 */}
+                                <div className="group cursor-pointer scale-on-hover">
+                                    <div className="relative rounded-2xl overflow-hidden bg-[#6b6b6b]" style={{ aspectRatio: '1/1' }}>
+                                        <video className="w-full h-full object-cover" autoPlay muted loop playsInline>
+                                            <source src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260516_123323_f909c2b8-ff6c-4edf-882b-8ebcdbe389b5.mp4" type="video/mp4" />
+                                        </video>
+                                        <div className="absolute bottom-4 left-4 h-9 bg-gray-900 rounded-full flex items-center overflow-hidden transition-all duration-300 ease-in-out group-hover:w-[168px]" style={{ width: '36px' }}>
+                                            <div className="flex items-center gap-2 px-3">
+                                                <span className="text-[13px] font-medium text-white whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-100">View case study</span>
+                                                <Icon name="ArrowRight" className="w-[14px] h-[14px] text-white flex-shrink-0 transition-transform duration-300 -rotate-45 group-hover:rotate-0" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <p className="text-[13px] sm:text-[14px] text-gray-600 mt-4 leading-relaxed">Transforming a dated platform into a conversion-focused brand experience</p>
+                                    <h3 className="text-[14px] sm:text-[15px] font-semibold text-gray-900 mt-1">Memory Systems</h3>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* PRICING */}
+                    <section className="bg-white pt-16 sm:pt-20 lg:pt-32 pb-16 sm:pb-20 lg:pb-28">
+                        <div className="max-w-[1440px] mx-auto px-5 sm:px-8 lg:px-12">
+                            <div className="flex items-center gap-3 mb-6 sm:mb-8">
+                                <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-gray-900 text-white flex items-center justify-center text-[11px] sm:text-[12px] font-semibold">3</div>
+                                <div className="text-[12px] sm:text-[13px] font-medium border border-gray-200 rounded-full px-3 sm:px-4 py-1 sm:py-1.5">Pricing plans</div>
+                            </div>
+
+                            <h2 className="mb-10 sm:mb-14 lg:mb-16" style={{ fontSize: 'clamp(1.75rem, 7vw, 4.2rem)', fontWeight: 500, lineHeight: 1.08, letterSpacing: '-0.03em', color: '#111' }}>
+                                Simple pricing
+                            </h2>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 sm:gap-6 lg:gap-7">
+                                <div className="bg-white border border-gray-200 p-8 rounded-2xl glow-on-hover">
+                                    <h3 className="text-2xl font-semibold mb-2">Starter</h3>
+                                    <div className="mb-6">
+                                        <span className="text-5xl font-normal">$0</span>
+                                        <span className="text-gray-600">/month</span>
+                                    </div>
+                                    <ul className="space-y-3 mb-8 text-sm">
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>100 tasks/month</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>1 workspace</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>Community support</span>
+                                        </li>
+                                    </ul>
+                                    <button className="w-full py-3 border border-gray-300 rounded-full font-medium text-sm hover:bg-gray-50 transition-colors">
+                                        Get Started
+                                    </button>
+                                </div>
+
+                                <div className="bg-black text-white p-8 rounded-2xl relative glow-on-hover">
+                                    <div className="absolute top-4 right-4 bg-white text-black text-xs font-bold px-3 py-1 rounded-full shimmer">POPULAR</div>
+                                    <h3 className="text-2xl font-semibold mb-2">Pro</h3>
+                                    <div className="mb-6">
+                                        <span className="text-5xl font-normal">$49</span>
+                                        <span className="text-gray-400">/month</span>
+                                    </div>
+                                    <ul className="space-y-3 mb-8 text-sm">
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>Unlimited tasks</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>5 workspaces</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>Priority support</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>Advanced memory</span>
+                                        </li>
+                                    </ul>
+                                    <button className="w-full py-3 bg-white text-black rounded-full font-medium text-sm hover:bg-gray-100 transition-colors">
+                                        Start Free Trial
+                                    </button>
+                                </div>
+
+                                <div className="bg-white border border-gray-200 p-8 rounded-2xl glow-on-hover">
+                                    <h3 className="text-2xl font-semibold mb-2">Enterprise</h3>
+                                    <div className="mb-6">
+                                        <span className="text-5xl font-normal">Custom</span>
+                                    </div>
+                                    <ul className="space-y-3 mb-8 text-sm">
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>Unlimited everything</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>On-premise deployment</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>Dedicated support</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <Icon name="Check" className="w-4 h-4" />
+                                            <span>Custom integrations</span>
+                                        </li>
+                                    </ul>
+                                    <button className="w-full py-3 border border-gray-300 rounded-full font-medium text-sm hover:bg-gray-50 transition-colors">
+                                        Contact Sales
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* FOOTER */}
+                    <footer className="px-6 py-12 border-t border-gray-200">
+                        <div className="max-w-6xl mx-auto">
+                            <div className="grid md:grid-cols-4 gap-8 mb-12">
+                                <div>
+                                    <div className="flex items-center gap-2 mb-4">
+                                        <div className="w-5 h-5 bg-black rounded-sm flex items-center justify-center">
+                                            <Icon name="Cpu" className="w-3 h-3 text-white" fill="white" />
+                                        </div>
+                                        <span className="text-lg font-semibold">Sharrowkin</span>
+                                    </div>
+                                    <p className="text-sm text-gray-600">Autonomous developer agent for modern teams.</p>
+                                </div>
+
+                                <div>
+                                    <h4 className="font-semibold mb-3 text-sm">Product</h4>
+                                    <ul className="space-y-2 text-sm text-gray-600">
+                                        <li><a href="#" className="hover:text-black">Features</a></li>
+                                        <li><a href="#" className="hover:text-black">Pricing</a></li>
+                                        <li><a href="#" className="hover:text-black">Documentation</a></li>
+                                        <li><a href="#" className="hover:text-black">API Reference</a></li>
+                                    </ul>
+                                </div>
+
+                                <div>
+                                    <h4 className="font-semibold mb-3 text-sm">Company</h4>
+                                    <ul className="space-y-2 text-sm text-gray-600">
+                                        <li><a href="#" className="hover:text-black">About</a></li>
+                                        <li><a href="#" className="hover:text-black">Blog</a></li>
+                                        <li><a href="#" className="hover:text-black">Careers</a></li>
+                                        <li><a href="#" className="hover:text-black">Contact</a></li>
+                                    </ul>
+                                </div>
+
+                                <div>
+                                    <h4 className="font-semibold mb-3 text-sm">Legal</h4>
+                                    <ul className="space-y-2 text-sm text-gray-600">
+                                        <li><a href="#" className="hover:text-black">Privacy</a></li>
+                                        <li><a href="#" className="hover:text-black">Terms</a></li>
+                                        <li><a href="#" className="hover:text-black">Security</a></li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <div className="pt-8 border-t border-gray-200 flex flex-col md:flex-row items-center justify-between gap-4">
+                                <p className="text-sm text-gray-600">© 2026 Sharrowkin. All rights reserved.</p>
+                                <div className="flex items-center gap-6">
+                                    <a href="#" className="text-gray-600 hover:text-black">
+                                        <Icon name="Github" className="w-5 h-5" />
+                                    </a>
+                                    <a href="#" className="text-gray-600 hover:text-black">
+                                        <Icon name="Twitter" className="w-5 h-5" />
+                                    </a>
+                                    <a href="#" className="text-gray-600 hover:text-black">
+                                        <Icon name="Linkedin" className="w-5 h-5" />
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

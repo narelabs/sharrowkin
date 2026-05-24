@@ -391,10 +391,11 @@ class GeminiClient:
             "создай", "напиши", "исправь", "добавь", "добавлю", "удали", "измени",
             "сделай", "запусти", "установи", "обнови", "рефактор", "улучши", "улучшу",
             "изучи", "изучай", "просканируй", "проанализируй", "проект", "репозиторий",
+            "проверь", "статус", "покажи", "список", "найди", "поиск",
             "create", "write", "fix", "add", "delete", "remove", "change",
             "make", "run", "install", "update", "refactor", "build", "test",
             "deploy", "debug", "implement", "file", "code", "function",
-            "analyze", "scan", "study",
+            "analyze", "scan", "study", "check", "status", "show", "list", "find", "search",
             "файл", "код", "функцию", "класс", "модуль", "компонент",
         }
         if len(words) <= 3 and not any(w in code_keywords for w in words):

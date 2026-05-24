@@ -40,6 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import routers
 from api import github_router, agent_router, system_router
 from api.sessions import router as sessions_router
+from api.routers.workspace import router as workspace_router
 
 # Create FastAPI app
 app = FastAPI(
@@ -57,11 +58,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Background task for session cleanup
+import asyncio
+from api.routers.agent import _cleanup_expired_sessions
+
+async def periodic_session_cleanup():
+    """Background task to clean up expired sessions every 5 minutes."""
+    while True:
+        await asyncio.sleep(300)  # 5 minutes
+        try:
+            _cleanup_expired_sessions()
+        except Exception as e:
+            print(f"[Session Cleanup] Error: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks on startup."""
+    asyncio.create_task(periodic_session_cleanup())
+    print("[Startup] Session cleanup task started")
+
 # Include routers
 app.include_router(github_router)
 app.include_router(agent_router)
 app.include_router(system_router)
 app.include_router(sessions_router, prefix="/api/sessions")
+app.include_router(workspace_router)
 
 
 @app.get("/")
@@ -72,7 +93,13 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "docs": "/docs",
-        "health": "/api/health"
+        "health": "/api/health",
+        "endpoints": {
+            "sessions": "/api/sessions",
+            "workspace_stats": "/api/workspace/stats",
+            "github": "/api/github",
+            "agent": "/api/agent"
+        }
     }
 
 
@@ -82,5 +109,8 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True
+        reload=True,
+        ws_ping_interval=30.0,  # Send ping every 30 seconds
+        ws_ping_timeout=300.0,  # Wait 5 minutes for pong response
+        timeout_keep_alive=300  # Keep connection alive for 5 minutes
     )

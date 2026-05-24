@@ -51,11 +51,13 @@ class HierarchicalPlanner:
     def __init__(
         self,
         rld_memory_path: Path | None = None,
-        max_decomposition_depth: int = 3,
+        max_decomposition_depth: int = 2,  # ✅ OPTIMIZE: Reduced from 3 to 2
+        max_tasks: int = 50,  # ✅ NEW: Limit total tasks
     ) -> None:
         self.rld_memory_path = rld_memory_path or Path(".sharrowkin/rld_plans")
         self.rld_memory_path.mkdir(parents=True, exist_ok=True)
         self.max_decomposition_depth = max_decomposition_depth
+        self.max_tasks = max_tasks
 
         # Historical data for time estimation
         self.task_duration_history: dict[str, list[float]] = {}
@@ -103,6 +105,10 @@ class HierarchicalPlanner:
         if depth >= self.max_decomposition_depth:
             return
 
+        # ✅ NEW: Check if we've reached max_tasks limit
+        if len(graph.tasks) >= self.max_tasks:
+            return
+
         # Check if we have a stored pattern for this type of task
         pattern = self._load_plan_pattern(task.title)
         if pattern:
@@ -112,6 +118,10 @@ class HierarchicalPlanner:
 
         # Add subtasks to graph
         for subtask in decomposition.subtasks:
+            # ✅ NEW: Stop if max_tasks reached
+            if len(graph.tasks) >= self.max_tasks:
+                break
+
             subtask.metadata["level"] = depth + 1
             subtask.metadata["parent_id"] = task.id
             graph.add_task(subtask)
@@ -125,6 +135,8 @@ class HierarchicalPlanner:
 
         # Recursively decompose complex subtasks
         for subtask in decomposition.subtasks:
+            if len(graph.tasks) >= self.max_tasks:
+                break
             if self._is_complex_task(subtask):
                 self._decompose_task(subtask, graph, context, depth + 1)
 

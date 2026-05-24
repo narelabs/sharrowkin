@@ -7,6 +7,8 @@ import os
 from dataclasses import dataclass
 
 import httpx
+from aiolimiter import AsyncLimiter  # ✅ NEW: Rate limiting
+
 
 # Manually load .env variables if present
 env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
@@ -188,7 +190,7 @@ class GeminiClient:
     def __init__(self, api_key: str | None = None, model: str = "gemini-2.5-flash") -> None:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.model = model
-        
+
         # Omniroute proxy support (Anthropic-compatible endpoint)
         self.omniroute_base_url = os.getenv("ANTHROPIC_BASE_URL")
         self.omniroute_token = (
@@ -198,58 +200,106 @@ class GeminiClient:
         )
         self.omniroute_model = os.getenv("ANTHROPIC_MODEL") or "kr/claude-sonnet-4.5"
 
+        # ✅ NEW: Connection pooling for better performance
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0, connect=10.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+        )
+
+        # ✅ NEW: Rate limiting (10 requests per minute to avoid API bans)
+        self._rate_limiter = AsyncLimiter(max_rate=10, time_period=60)
+
+    async def __aenter__(self):
+        """Context manager support."""
+        return self
+
+    async def __aexit__(self, *args):
+        """Close client on exit."""
+        await self._client.aclose()
+
+    async def close(self):
+        """Explicitly close the client."""
+        await self._client.aclose()
+
     @property
     def configured(self) -> bool:
         return bool(self.api_key) or bool(self.omniroute_base_url)
 
     async def generate_text(self, prompt: str, system_instruction: str | None = None) -> str:
-        if not self.api_key and not self.omniroute_base_url:
-            raise GeminiConfigurationError(
-                "Neither GEMINI_API_KEY nor ANTHROPIC_BASE_URL is set."
-            )
-            
+        # ✅ NEW: Apply rate limiting
+        async with self._rate_limiter:
+            if not self.api_key and not self.omniroute_base_url:
+                raise GeminiConfigurationError(
+                    "Neither GEMINI_API_KEY nor ANTHROPIC_BASE_URL is set."
+                )
+
         if self.omniroute_base_url:
             base_url = self.omniroute_base_url.rstrip("/")
-            url = f"{base_url}/messages"
-            headers = {
-                "x-api-key": self.omniroute_token,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            }
             system = system_instruction or "You are Sharrowkin, a local autonomous developer agent."
-            payload = {
-                "model": self.omniroute_model,
-                "max_tokens": 2048,
-                "system": system,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-                "stream": False,
-            }
+
+            # Detect API type by base URL
+            is_openai_compatible = "ecomagent" in base_url or "openai" in base_url or "localhost" in base_url
+
+            if is_openai_compatible:
+                # Use OpenAI format directly for EcoMagent and similar APIs
+                url = f"{base_url}/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {self.omniroute_token}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": self.omniroute_model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.2,
+                    "stream": False,
+                }
+            else:
+                # Use Anthropic format for Omniroute proxy
+                url = f"{base_url}/messages"
+                headers = {
+                    "x-api-key": self.omniroute_token,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                }
+                payload = {
+                    "model": self.omniroute_model,
+                    "max_tokens": 2048,
+                    "system": system,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2,
+                    "stream": False,
+                }
+
             try:
-                async with httpx.AsyncClient(timeout=300.0) as client:
-                    response = await client.post(url, headers=headers, json=payload)
-                    if response.status_code == 404:
-                        # Try OpenAI fallback
-                        openai_url = f"{base_url}/chat/completions"
-                        openai_headers = {
-                            "Authorization": f"Bearer {self.omniroute_token}",
-                            "Content-Type": "application/json",
-                        }
-                        openai_payload = {
-                            "model": self.omniroute_model,
-                            "messages": [
-                                {"role": "system", "content": system},
-                                {"role": "user", "content": prompt}
-                            ],
-                            "temperature": 0.2,
-                            "stream": False,
-                        }
-                        openai_response = await client.post(openai_url, headers=openai_headers, json=openai_payload)
-                        openai_response.raise_for_status()
-                        return await _get_response_text(openai_response)
-                    
-                    response.raise_for_status()
-                    return await _get_response_text(response)
+                # ✅ OPTIMIZE: Use pooled client instead of creating new one
+                response = await self._client.post(url, headers=headers, json=payload)
+
+                # If Anthropic format fails with 404, try OpenAI fallback
+                if response.status_code == 404 and not is_openai_compatible:
+                    openai_url = f"{base_url}/chat/completions"
+                    openai_headers = {
+                        "Authorization": f"Bearer {self.omniroute_token}",
+                        "Content-Type": "application/json",
+                    }
+                    openai_payload = {
+                        "model": self.omniroute_model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "temperature": 0.2,
+                        "stream": False,
+                    }
+                    # ✅ OPTIMIZE: Use pooled client
+                    openai_response = await self._client.post(openai_url, headers=openai_headers, json=openai_payload)
+                    openai_response.raise_for_status()
+                    return await _get_response_text(openai_response)
+
+                response.raise_for_status()
+                return await _get_response_text(response)
             except Exception as e:
                 raise RuntimeError(f"Omniroute call failed: {e}")
         else:

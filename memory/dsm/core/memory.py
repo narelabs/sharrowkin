@@ -112,7 +112,9 @@ class DynamicSegmentedMemory:
         if link_related:
             self._link_related(written)
 
-        self._rebuild_index()
+        # ✅ OPTIMIZE: Use incremental upsert instead of full rebuild
+        for segment in written:
+            self.index.upsert(segment)
         self.categories.refresh_embeddings(self.segments)
         return written
 
@@ -142,7 +144,8 @@ class DynamicSegmentedMemory:
         self.graph.add_node(segment.id)
         self.sparse_index.upsert(segment)
         self._link_related([segment])
-        self._rebuild_index()
+        # ✅ OPTIMIZE: Use incremental upsert instead of full rebuild
+        self.index.upsert(segment)
         self.categories.refresh_embeddings(self.segments)
         return segment
 

@@ -27,6 +27,7 @@ class ExecutionConfig(BaseModel):
     max_iterations: int = 30
     strict_mode: bool = True
     enable_semantic_graph: bool = True
+    ui_delays_enabled: bool = False  # ✅ NEW: Disable UI delays for production
 
 
 class AgentConfig(BaseModel):

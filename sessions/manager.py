@@ -6,8 +6,18 @@ import json
 import time
 from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
+
+
+@dataclass
+class SessionAction:
+    """Represents a single action in a session."""
+    timestamp: str
+    phase: str
+    action: str
+    tool: Optional[str] = None
+    result: Optional[str] = None
 
 
 @dataclass
@@ -22,6 +32,7 @@ class Session:
     workspace_path: str
     model: str
     message_count: int = 0
+    actions: list[SessionAction] = field(default_factory=list)
 
 
 class SessionManager:
@@ -39,7 +50,12 @@ class SessionManager:
             try:
                 with open(self.sessions_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    self.sessions = {s["id"]: Session(**s) for s in data}
+                    self.sessions = {}
+                    for s in data:
+                        # Convert actions list to SessionAction objects
+                        actions = [SessionAction(**a) for a in s.get("actions", [])]
+                        s["actions"] = actions
+                        self.sessions[s["id"]] = Session(**s)
             except Exception as e:
                 print(f"[SessionManager] Failed to load sessions: {e}")
                 self.sessions = {}
@@ -50,7 +66,12 @@ class SessionManager:
         """Save sessions to disk."""
         try:
             with open(self.sessions_file, "w", encoding="utf-8") as f:
-                data = [asdict(s) for s in self.sessions.values()]
+                data = []
+                for s in self.sessions.values():
+                    session_dict = asdict(s)
+                    # Convert SessionAction objects to dicts
+                    session_dict["actions"] = [asdict(a) for a in s.actions]
+                    data.append(session_dict)
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"[SessionManager] Failed to save sessions: {e}")
@@ -75,7 +96,8 @@ class SessionManager:
             status="running",
             workspace_path=workspace_path,
             model=model,
-            message_count=1
+            message_count=1,
+            actions=[]
         )
 
         self.sessions[session_id] = session
@@ -103,9 +125,41 @@ class SessionManager:
 
         self._save_sessions()
 
+    def add_action(
+        self,
+        session_id: str,
+        phase: str,
+        action: str,
+        tool: Optional[str] = None,
+        result: Optional[str] = None
+    ):
+        """Add an action to session history."""
+        if session_id not in self.sessions:
+            return
+
+        session = self.sessions[session_id]
+        now = datetime.utcnow().isoformat() + "Z"
+
+        action_record = SessionAction(
+            timestamp=now,
+            phase=phase,
+            action=action,
+            tool=tool,
+            result=result
+        )
+
+        session.actions.append(action_record)
+        session.updated_at = now
+        self._save_sessions()
+
     def get_session(self, session_id: str) -> Optional[Session]:
         """Get session by ID."""
         return self.sessions.get(session_id)
+
+    def get_session_history(self, session_id: str) -> list[SessionAction]:
+        """Get action history for a session."""
+        session = self.sessions.get(session_id)
+        return session.actions if session else []
 
     def list_sessions(self, limit: int = 50) -> list[Session]:
         """List all sessions, sorted by updated_at (newest first)."""

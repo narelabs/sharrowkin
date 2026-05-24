@@ -719,6 +719,70 @@ class SharrowkinAgent:
                             # Keep history manageable (last 20 messages)
                             if len(self.conversation_history) > 20:
                                 self.conversation_history = self.conversation_history[-20:]
+
+                        # ✅ ASK LLM TO SUMMARIZE INFORMATIONAL ANALYSIS
+                        if self.gemini.configured:
+                            try:
+                                # Detect user language from task
+                                is_russian = any(ord(c) >= 0x0400 and ord(c) <= 0x04FF for c in state.task)
+
+                                if is_russian:
+                                    summary_prompt = f"""Ты только что проанализировал проект и ответил на вопрос пользователя. Подведи итоги своей работы.
+
+Вопрос пользователя: {state.task}
+
+Твой анализ:
+{state.last_rationale[:1000] if state.last_rationale else 'Анализ выполнен'}
+
+Напиши краткий отчёт (2-3 предложения) о том, что ты проанализировал и какой ответ дал.
+Используй формат:
+## ✅ Анализ завершён
+[твой отчёт]"""
+                                    system_msg = "Ты Sharrowkin агент. Подведи итоги своего анализа кратко и по делу."
+                                else:
+                                    summary_prompt = f"""You just analyzed the project and answered the user's question. Summarize your work.
+
+User question: {state.task}
+
+Your analysis:
+{state.last_rationale[:1000] if state.last_rationale else 'Analysis completed'}
+
+Write a brief report (2-3 sentences) about what you analyzed and what answer you provided.
+Use format:
+## ✅ Analysis Complete
+[your report]"""
+                                    system_msg = "You are Sharrowkin agent. Summarize your analysis briefly and to the point."
+
+                                summary = await self.gemini.generate_text(
+                                    summary_prompt,
+                                    system_msg
+                                )
+
+                                yield {"type": "content", "content": summary}
+                                # ✅ SAVE SUMMARY TO CONVERSATION HISTORY
+                                self.conversation_history.append({"role": "assistant", "content": summary})
+                                if len(self.conversation_history) > 20:
+                                    self.conversation_history = self.conversation_history[-20:]
+                            except Exception as e:
+                                print(f"[AGENT] Summary generation failed: {e}")
+                                # Fallback to simple message
+                                is_russian = any(ord(c) >= 0x0400 and ord(c) <= 0x04FF for c in state.task)
+                                if is_russian:
+                                    fallback = f"## ✅ Анализ завершён\n\nПроанализировал проект и ответил на вопрос: {state.task}"
+                                else:
+                                    fallback = f"## ✅ Analysis Complete\n\nAnalyzed the project and answered the question: {state.task}"
+                                yield {"type": "content", "content": fallback}
+                                self.conversation_history.append({"role": "assistant", "content": fallback})
+                        else:
+                            # No LLM configured - use simple summary
+                            is_russian = any(ord(c) >= 0x0400 and ord(c) <= 0x04FF for c in state.task)
+                            if is_russian:
+                                fallback = f"## ✅ Анализ завершён\n\nПроанализировал проект и ответил на вопрос: {state.task}"
+                            else:
+                                fallback = f"## ✅ Analysis Complete\n\nAnalyzed the project and answered the question: {state.task}"
+                            yield {"type": "content", "content": fallback}
+                            self.conversation_history.append({"role": "assistant", "content": fallback})
+
                         yield self._status("done")
                         yield self._log("success", "Informational analysis completed.")
                         return
@@ -855,7 +919,11 @@ class SharrowkinAgent:
                     # ✅ ASK LLM TO SUMMARIZE ITS OWN WORK
                     if self.gemini.configured:
                         try:
-                            summary_prompt = f"""Ты только что выполнил задачу. Подведи итоги своей работы.
+                            # Detect user language from task
+                            is_russian = any(ord(c) >= 0x0400 and ord(c) <= 0x04FF for c in state.task)
+
+                            if is_russian:
+                                summary_prompt = f"""Ты только что выполнил задачу. Подведи итоги своей работы.
 
 Задача: {state.task}
 
@@ -873,10 +941,31 @@ class SharrowkinAgent:
 Используй формат:
 ## ✅ Задача выполнена
 [твой отчёт]"""
+                                system_msg = "Ты Sharrowkin агент. Подведи итоги своей работы кратко и по делу."
+                            else:
+                                summary_prompt = f"""You just completed a task. Summarize your work.
+
+Task: {state.task}
+
+What was done:
+{chr(10).join(f"- {action}" for action in state.actions)}
+
+Changed files: {', '.join(state.current_changed_files) if state.current_changed_files else 'none'}
+
+Tools used: {', '.join(list(dict.fromkeys(state.tools_used)))}
+
+Result:
+{state.last_rationale if state.last_rationale else 'Changes applied'}
+
+Write a brief report (2-4 sentences) about what you did and what result you achieved.
+Use format:
+## ✅ Task Complete
+[your report]"""
+                                system_msg = "You are Sharrowkin agent. Summarize your work briefly and to the point."
 
                             summary = await self.gemini.generate_text(
                                 summary_prompt,
-                                "Ты Sharrowkin агент. Подведи итоги своей работы кратко и по делу."
+                                system_msg
                             )
 
                             yield {"type": "content", "content": summary}
@@ -887,11 +976,22 @@ class SharrowkinAgent:
                         except Exception as e:
                             print(f"[AGENT] Summary generation failed: {e}")
                             # Fallback to simple message
-                            fallback = f"## ✅ Задача выполнена\n\n{state.last_rationale if state.last_rationale else 'Изменения применены успешно.'}"
+                            is_russian = any(ord(c) >= 0x0400 and ord(c) <= 0x04FF for c in state.task)
+                            if is_russian:
+                                fallback = f"## ✅ Задача выполнена\n\n{state.last_rationale if state.last_rationale else 'Изменения применены успешно.'}"
+                            else:
+                                fallback = f"## ✅ Task Complete\n\n{state.last_rationale if state.last_rationale else 'Changes applied successfully.'}"
                             yield {"type": "content", "content": fallback}
                             self.conversation_history.append({"role": "assistant", "content": fallback})
                     else:
                         # No LLM configured - use simple summary
+                        is_russian = any(ord(c) >= 0x0400 and ord(c) <= 0x04FF for c in state.task)
+                        if is_russian:
+                            fallback = f"## ✅ Задача выполнена\n\n{state.last_rationale if state.last_rationale else 'Изменения применены успешно.'}"
+                        else:
+                            fallback = f"## ✅ Task Complete\n\n{state.last_rationale if state.last_rationale else 'Changes applied successfully.'}"
+                        yield {"type": "content", "content": fallback}
+                        self.conversation_history.append({"role": "assistant", "content": fallback})
                         simple_summary = f"## ✅ Задача выполнена\n\nИзменено файлов: {len(state.current_changed_files)}"
                         yield {"type": "content", "content": simple_summary}
                         self.conversation_history.append({"role": "assistant", "content": simple_summary})
@@ -973,11 +1073,11 @@ class SharrowkinAgent:
         # Cache miss - perform full scan
         yield self._log("info", f"Scanning workspace: {state.workspace}")
         yield self._tool_call("scan_workspace", status="running", target=str(state.workspace))
-        await asyncio.sleep(0.3)  # Small delay to show tool is working
+        await asyncio.sleep(0.3) if self.config.execution.ui_delays_enabled else await asyncio.sleep(0)  # Small delay to show tool is working
         summaries = await asyncio.to_thread(scan_workspace, state.workspace)
         total_lines = sum(summary.line_count for summary in summaries)
         state.workspace_summary = summarize_workspace(summaries)
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.2 if self.config.execution.ui_delays_enabled else 0)
         yield self._tool_call("scan_workspace", status="done", target=str(state.workspace), detail=f"{len(summaries)} files, {total_lines} lines")
         state.actions.append(f"Scanned {len(summaries)} source files with AST summaries")
         state.tools_used.append("pathlib")
@@ -1092,7 +1192,7 @@ class SharrowkinAgent:
                 semantic_insights += phase3_insights
 
             state.workspace_summary += semantic_insights
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.2 if self.config.execution.ui_delays_enabled else 0)
             yield self._tool_call("analyze_dependencies", status="done", target=str(state.workspace), detail=f"complexity={state.complexity_avg}, circular={state.circular_dependencies}")
 
             # Cache the scan results for future queries
@@ -1186,7 +1286,7 @@ class SharrowkinAgent:
         state.tools_used.append("trace_memory")
         state.tools_used.append("memory_field")
 
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.2 if self.config.execution.ui_delays_enabled else 0)
         detail = f"{len(state.memory_context)} chars, {similar_count} solutions, {rld_count} genes"
         yield self._tool_call("memory_recall", status="done", target="All Memory Systems", detail=detail)
 
@@ -1321,25 +1421,31 @@ class SharrowkinAgent:
                 lines.append(f"Attempt {record.iteration}:")
                 lines.append(f"  Changed Files: {', '.join(record.changed_files) if record.changed_files else 'None'}")
                 if record.patch_diff:
-                    diff_preview = "\\n".join(record.patch_diff.splitlines()[:15])
-                    if len(record.patch_diff.splitlines()) > 15:
-                        diff_preview += "\\n  ... [truncated]"
-                    lines.append("  Patch Diff:\\n  " + diff_preview.replace("\\n", "\\n  "))
+                    # ✅ OPTIMIZE: Limit diff to 500 chars instead of full diff
+                    diff_preview = record.patch_diff[:500]
+                    if len(record.patch_diff) > 500:
+                        diff_preview += "\n  ... [truncated for brevity]"
+                    lines.append("  Patch Diff:\n  " + diff_preview.replace("\n", "\n  "))
                 if record.error:
-                    err_preview = "\\n".join(record.error.splitlines()[-10:])
-                    lines.append("  Error output:\\n  " + err_preview.replace("\\n", "\\n  "))
+                    # ✅ OPTIMIZE: Limit error to last 300 chars
+                    err_preview = record.error[-300:]
+                    lines.append("  Error output:\n  " + err_preview.replace("\n", "\n  "))
                 lines.append("-" * 30)
-            
+
             lines.append(
-                "CRITICAL DIRECTIVE:\\n"
+                "CRITICAL DIRECTIVE:\n"
                 "Analyze the above errors. Do not generate the exact same patches or run the same failing commands. "
                 "Think step-by-step why the previous attempts failed and choose a different, logically sound approach."
             )
-            failure_guidelines = "\\n".join(lines)
+            failure_guidelines = "\n".join(lines)
+
+            # ✅ OPTIMIZE: Limit total failure_guidelines to 2000 chars
+            if len(failure_guidelines) > 2000:
+                failure_guidelines = failure_guidelines[:2000] + "\n... [truncated - see pattern above]"
 
         previous_err_combined = state.last_error
         if failure_guidelines:
-            previous_err_combined = f"{failure_guidelines}\\n\\nLatest Error:\\n{state.last_error}"
+            previous_err_combined = f"{failure_guidelines}\n\nLatest Error:\n{state.last_error}"
 
         workspace_summary_enriched = (
             f"=== CODEBASE HEALTH METRICS ===\n"
@@ -1435,7 +1541,7 @@ class SharrowkinAgent:
 
         # --- Generate patch with enriched context ---
         yield self._tool_call("llm_generate", status="running", target=self.gemini.model_id if hasattr(self.gemini, 'model_id') else "LLM", detail=f"iteration {iteration}")
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.4 if self.config.execution.ui_delays_enabled else 0)
 
         # Use regular Gemini client (no Antigravity SDK dependency) with automatic context reduction on timeout/error
         try:
@@ -1447,7 +1553,7 @@ class SharrowkinAgent:
                 action_history=state.actions,
                 file_contents=file_contents,
             )
-        except (httpx.TimeoutException, httpx.ReadTimeout, httpx.WriteTimeout, Exception) as exc:
+        except (httpx.TimeoutError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
             yield self._log("warning", f"Генерация патча завершилась с ошибкой или таймаутом: {exc}. Снижаю размер контекста и пробую снова...")
 
             # Reduce context dynamically
@@ -1469,7 +1575,7 @@ class SharrowkinAgent:
             
         state.last_rationale = generated.rationale
         await self.plugins.run_post_reason(state, generated, iteration)
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.2 if self.config.execution.ui_delays_enabled else 0)
         yield self._tool_call("llm_generate", status="done", target="LLM (Antigravity)", detail=f"{len(generated.files)} files, {len(generated.commands)} commands")
 
         if generated.rationale:
@@ -1490,7 +1596,7 @@ class SharrowkinAgent:
                 cmd_result = await asyncio.to_thread(run_terminal_command, state.workspace, command)
                 state.actions.append(f"Executed: {command} (code {cmd_result.exit_code})")
                 state.tools_used.append("terminal")
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.2 if self.config.execution.ui_delays_enabled else 0)
                 if cmd_result.success:
                     yield self._tool_call("terminal", status="done", target=command, detail=f"exit {cmd_result.exit_code}")
                     yield self._tool_activity("Ran command", message=command, target="terminal")
@@ -1565,7 +1671,7 @@ class SharrowkinAgent:
         yield self._log("info", f"Patching {len(generated.files)} file(s)...")
         for path in generated.files:
             yield self._tool_call("write_file", status="running", target=path)
-            await asyncio.sleep(0.15)  # Small delay per file
+            await asyncio.sleep(0.15 if self.config.execution.ui_delays_enabled else 0)  # Small delay per file
         # Diff Preview before apply
         proposed_patch_diff = "\n".join([f"--- {p}\n+++ {p}\n{c[:50]}..." for p, c in generated.files.items()])
         yield {
@@ -1593,7 +1699,7 @@ class SharrowkinAgent:
         yield self._log("info", f"Applied patch to {len(patch.changed_files)} files.")
         for changed_file in patch.changed_files:
             lines_changed = len(generated.files.get(changed_file, "").splitlines())
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.1 if self.config.execution.ui_delays_enabled else 0)
             yield self._tool_call("write_file", status="done", target=changed_file, lines_changed=lines_changed)
             yield self._tool_activity("Updated file", message=changed_file, target=changed_file)
         yield {"type": "diff", "diff": state.final_diff, "files": patch.changed_files}
@@ -1647,7 +1753,7 @@ class SharrowkinAgent:
 
         yield self._log("info", "Running tests to validate changes.")
         yield self._tool_call("pytest", status="running", target=str(state.workspace))
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5 if self.config.execution.ui_delays_enabled else 0)
 
         test_result = await asyncio.to_thread(run_pytest, state.workspace)
         state.actions.append(f"Ran pytest: exit_code={test_result.exit_code}, success={test_result.success}")

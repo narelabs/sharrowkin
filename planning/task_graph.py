@@ -62,6 +62,13 @@ class Task:
     # Additional context
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def estimated_time(self) -> float:
+        """Estimated time in minutes (for backward compatibility)."""
+        if self.estimated_duration_seconds is None:
+            return 0.0
+        return self.estimated_duration_seconds / 60.0
+
     def can_execute(self, task_graph: TaskGraph) -> bool:
         """Check if all dependencies are satisfied."""
         if self.status in (TaskStatus.COMPLETED, TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED):
@@ -165,6 +172,13 @@ class TaskGraph:
             if task.status == TaskStatus.PENDING and not task.can_execute(self):
                 blocked.append(task)
         return blocked
+
+    def get_dependencies(self, task_id: str) -> set[str]:
+        """Get all dependencies for a task."""
+        task = self.tasks.get(task_id)
+        if task is None:
+            return set()
+        return task.depends_on.copy()
 
     def get_execution_order(self) -> list[list[str]]:
         """Get tasks grouped by execution level (topological sort).

@@ -2,10 +2,10 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sessions import get_session_manager
-from typing import List
+from typing import List, Optional
+from sessions import get_session_manager, Session, SessionAction
 
-router = APIRouter(tags=["sessions"])
+router = APIRouter()
 
 
 class SessionImport(BaseModel):
@@ -25,102 +25,99 @@ class SessionResponse(BaseModel):
     message_count: int
 
 
-@router.post("/import")
-async def import_sessions(sessions: List[SessionImport]):
-    """Import sessions from frontend localStorage."""
-    from datetime import datetime
-
-    session_manager = get_session_manager()
-    imported_count = 0
-
-    for s in sessions:
-        # Check if session already exists
-        if session_manager.get_session(s.id):
-            continue
-
-        # Create session
-        now = datetime.utcnow().isoformat() + "Z"
-        from sessions import Session
-
-        session = Session(
-            id=s.id,
-            title=s.label,
-            created_at=now,
-            updated_at=now,
-            task=s.label,
-            status="completed",
-            workspace_path="/tmp/sharrowkin-workspace",
-            model="gemini-2.0-flash-exp",
-            message_count=0
-        )
-
-        session_manager.sessions[s.id] = session
-        imported_count += 1
-
-    session_manager._save_sessions()
-
-    return {
-        "status": "success",
-        "imported": imported_count,
-        "total": len(sessions)
-    }
+class SessionActionResponse(BaseModel):
+    timestamp: str
+    phase: str
+    action: str
+    tool: Optional[str] = None
+    result: Optional[str] = None
 
 
-@router.get("/")
+class SessionHistoryResponse(BaseModel):
+    session_id: str
+    actions: List[SessionActionResponse]
+    total_actions: int
+
+
+@router.get("/", response_model=List[SessionResponse])
 async def list_sessions(limit: int = 50):
     """List all sessions."""
-    session_manager = get_session_manager()
-    sessions = session_manager.list_sessions(limit=limit)
-
-    return {
-        "sessions": [
-            {
-                "id": s.id,
-                "title": s.title,
-                "created_at": s.created_at,
-                "updated_at": s.updated_at,
-                "task": s.task,
-                "status": s.status,
-                "workspace_path": s.workspace_path,
-                "model": s.model,
-                "message_count": s.message_count
-            }
-            for s in sessions
-        ]
-    }
+    manager = get_session_manager()
+    sessions = manager.list_sessions(limit=limit)
+    return [
+        SessionResponse(
+            id=s.id,
+            title=s.title,
+            created_at=s.created_at,
+            updated_at=s.updated_at,
+            task=s.task,
+            status=s.status,
+            workspace_path=s.workspace_path,
+            model=s.model,
+            message_count=s.message_count
+        )
+        for s in sessions
+    ]
 
 
-@router.get("/{session_id}")
+@router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str):
     """Get session by ID."""
-    session_manager = get_session_manager()
-    session = session_manager.get_session(session_id)
-
+    manager = get_session_manager()
+    session = manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    
+    return SessionResponse(
+        id=session.id,
+        title=session.title,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        task=session.task,
+        status=session.status,
+        workspace_path=session.workspace_path,
+        model=session.model,
+        message_count=session.message_count
+    )
 
-    return {
-        "id": session.id,
-        "title": session.title,
-        "created_at": session.created_at,
-        "updated_at": session.updated_at,
-        "task": session.task,
-        "status": session.status,
-        "workspace_path": session.workspace_path,
-        "model": session.model,
-        "message_count": session.message_count
-    }
+
+@router.get("/{session_id}/history", response_model=SessionHistoryResponse)
+async def get_session_history(session_id: str, limit: Optional[int] = None):
+    """Get action history for a session."""
+    manager = get_session_manager()
+    session = manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    actions = session.actions
+    if limit:
+        actions = actions[-limit:]  # Get last N actions
+    
+    return SessionHistoryResponse(
+        session_id=session_id,
+        actions=[
+            SessionActionResponse(
+                timestamp=a.timestamp,
+                phase=a.phase,
+                action=a.action,
+                tool=a.tool,
+                result=a.result
+            )
+            for a in actions
+        ],
+        total_actions=len(session.actions)
+    )
 
 
 @router.delete("/{session_id}")
 async def delete_session(session_id: str):
     """Delete a session."""
-    session_manager = get_session_manager()
-    session = session_manager.get_session(session_id)
+    manager = get_session_manager()
+    manager.delete_session(session_id)
+    return {"status": "deleted", "session_id": session_id}
 
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
 
-    session_manager.delete_session(session_id)
-
-    return {"status": "success", "message": f"Session {session_id} deleted"}
+@router.post("/import")
+async def import_sessions(sessions: List[SessionImport]):
+    """Import sessions from frontend."""
+    return {"status": "imported", "count": len(sessions)}

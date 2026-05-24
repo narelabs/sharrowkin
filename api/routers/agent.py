@@ -154,13 +154,60 @@ async def agent_websocket(websocket: WebSocket):
             "workspace": str(workspace)
         })
 
+        # ✅ NEW: Backpressure control with event queue
+        event_queue = asyncio.Queue(maxsize=100)
+        send_task = None
+
+        async def send_events():
+            """Background task to send events with backpressure control."""
+            while True:
+                try:
+                    event = await event_queue.get()
+                    if event is None:  # Sentinel to stop
+                        break
+                    await websocket.send_json(event)
+                except Exception as e:
+                    print(f"[WebSocket] Error sending event: {e}")
+                    break
+
+        # Start background sender
+        send_task = asyncio.create_task(send_events())
+
         # Run agent and stream events (pass workspace_path as string)
+        last_ping = time.time()
         async for event in agent.run(task, workspace_path=str(workspace)):
             try:
-                await websocket.send_json(event)
+                # Try to put event in queue, drop oldest if full
+                try:
+                    event_queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    # Drop oldest event and add new one
+                    try:
+                        event_queue.get_nowait()
+                        event_queue.put_nowait(event)
+                    except:
+                        pass
+
+                # Send heartbeat ping every 30 seconds to keep connection alive
+                current_time = time.time()
+                if current_time - last_ping > 30:
+                    try:
+                        heartbeat = {
+                            "type": "heartbeat",
+                            "timestamp": current_time
+                        }
+                        event_queue.put_nowait(heartbeat)
+                        last_ping = current_time
+                    except asyncio.QueueFull:
+                        pass  # Skip heartbeat if queue is full
             except Exception as e:
-                print(f"[WebSocket] Error sending event: {e}")
+                print(f"[WebSocket] Error queueing event: {e}")
                 break
+
+        # Wait for all events to be sent
+        await event_queue.put(None)  # Sentinel
+        if send_task:
+            await send_task
 
         # Update session timestamp after completion
         if session_id in _agent_sessions:

@@ -45,11 +45,11 @@ class SegmentIndex:
         if not segments:
             self._size = 0
             return
-            
+
         # Get dim from first segment
         first_emb = next(iter(segments.values())).embedding
         self._ensure_collection(len(first_emb))
-        
+
         points = []
         for segment_id, segment in segments.items():
             # Qdrant requires UUIDs or integers. We'll use uuid.uuid5 to generate stable UUIDs from segment_id
@@ -61,14 +61,14 @@ class SegmentIndex:
                     payload={"segment_id": segment_id}
                 )
             )
-            
+
         if points:
             # Overwrite collection
             self.client.recreate_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(size=self._dim, distance=Distance.COSINE)
             )
-            
+
             # Batch upload
             batch_size = 100
             for i in range(0, len(points), batch_size):
@@ -77,6 +77,21 @@ class SegmentIndex:
                     points=points[i:i + batch_size]
                 )
         self._size = len(points)
+
+    def upsert(self, segment: MemorySegment) -> None:
+        """✅ NEW: Incremental upsert single segment without rebuilding entire index."""
+        self._ensure_collection(len(segment.embedding))
+
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_OID, segment.id))
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=[PointStruct(
+                id=point_id,
+                vector=segment.embedding,
+                payload={"segment_id": segment.id}
+            )]
+        )
+        self._size += 1
 
     def search(self, query_embedding: list[float], k: int) -> list[tuple[str, float]]:
         if not self._initialized or self._size == 0:

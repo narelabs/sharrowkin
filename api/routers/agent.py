@@ -135,7 +135,7 @@ async def agent_websocket(websocket: WebSocket):
             })
         else:
             agent = SharrowkinAgent()
-            memory = MemoryBridge(workspace_path)
+            memory = MemoryBridge(workspace)  # Pass Path object, not string
             print(f"[Session] Created new agent for session {session_id}")
             await websocket.send_json({
                 "type": "session_info",

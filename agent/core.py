@@ -1553,7 +1553,7 @@ Use format:
                 action_history=state.actions,
                 file_contents=file_contents,
             )
-        except (httpx.TimeoutError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
+        except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
             yield self._log("warning", f"Генерация патча завершилась с ошибкой или таймаутом: {exc}. Снижаю размер контекста и пробую снова...")
 
             # Reduce context dynamically

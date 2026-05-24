@@ -180,7 +180,7 @@ response = await self._client.post(url, headers=headers, json=payload)
 **Решение**:
 ```python
 # agent/core.py:1556
-except (httpx.TimeoutError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
+except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
 ```
 
 **Результат**: Timeout корректно обрабатывается ✅

@@ -136,8 +136,10 @@ class MemoryBridge:
             rld_context_text = rld_context.context_text
             for activated in rld_context.activated:
                 gene = activated.gene
+                # Use task_context instead of pattern (ReasoningGene attribute)
+                pattern = gene.task_context if hasattr(gene, 'task_context') else str(gene)
                 rld_genes.append({
-                    "pattern": gene.pattern,
+                    "pattern": pattern,
                     "success_rate": gene.success_count / max(1, gene.activation_count),
                     "tools": gene.tools_used,
                     "weight": activated.weight

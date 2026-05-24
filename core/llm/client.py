@@ -489,57 +489,57 @@ class GeminiClient:
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    async with httpx.AsyncClient(timeout=300.0) as client:
-                        response = await client.post(url, headers=headers, json=payload)
-                        
-                        # Check for 402 Specifically
-                        if response.status_code == 402:
-                            raise GeminiConfigurationError(
-                                "Omniroute proxy returned 402 (Payment Required). "
-                                "Please check your API key, billing status, or funds/credits on your Omniroute console. "
-                                f"Response details: {response.text[:200]}"
-                            )
-                        
-                        if response.status_code >= 500 and attempt < max_retries - 1:
-                            await asyncio.sleep(2 ** attempt)
-                            continue
-                        
-                        # Fallback check if the proxy returned 404 on /messages (e.g. OpenAI compatibility)
-                        if response.status_code == 404 and attempt == 0:
-                            # Try OpenAI-compatible chat completion endpoint as fallback
-                            openai_url = f"{base_url}/chat/completions"
-                            openai_headers = {
-                                "Authorization": f"Bearer {self.omniroute_token}",
-                                "Content-Type": "application/json",
-                            }
-                            openai_payload = {
-                                "model": self.omniroute_model,
-                                "messages": [
-                                    {"role": "system", "content": system_prompt},
-                                    {"role": "user", "content": prompt}
-                                ],
-                                "temperature": 0.2,
-                                "stream": False,  # Explicitly request non-streaming response
-                            }
-                            try:
-                                openai_response = await client.post(openai_url, headers=openai_headers, json=openai_payload)
-                                if openai_response.status_code == 402:
-                                    raise GeminiConfigurationError(
-                                        "Omniroute proxy returned 402 (Payment Required) on fallback. "
-                                        "Please check your API key, billing status, or funds/credits on your Omniroute console. "
-                                        f"Response details: {openai_response.text[:200]}"
-                                    )
-                                openai_response.raise_for_status()
-                                text = await _get_response_text(openai_response)
-                                return parse_generated_patch(text)
-                            except GeminiConfigurationError:
-                                raise
-                            except Exception:
-                                pass
-                        
-                        response.raise_for_status()
-                        text = await _get_response_text(response)
-                        return parse_generated_patch(text)
+                    # ✅ FIXED: Use pooled client instead of creating new one
+                    response = await self._client.post(url, headers=headers, json=payload)
+
+                    # Check for 402 Specifically
+                    if response.status_code == 402:
+                        raise GeminiConfigurationError(
+                            "Omniroute proxy returned 402 (Payment Required). "
+                            "Please check your API key, billing status, or funds/credits on your Omniroute console. "
+                            f"Response details: {response.text[:200]}"
+                        )
+
+                    if response.status_code >= 500 and attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+
+                    # Fallback check if the proxy returned 404 on /messages (e.g. OpenAI compatibility)
+                    if response.status_code == 404 and attempt == 0:
+                        # Try OpenAI-compatible chat completion endpoint as fallback
+                        openai_url = f"{base_url}/chat/completions"
+                        openai_headers = {
+                            "Authorization": f"Bearer {self.omniroute_token}",
+                            "Content-Type": "application/json",
+                        }
+                        openai_payload = {
+                            "model": self.omniroute_model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": prompt}
+                            ],
+                            "temperature": 0.2,
+                            "stream": False,  # Explicitly request non-streaming response
+                        }
+                        try:
+                            openai_response = await self._client.post(openai_url, headers=openai_headers, json=openai_payload)
+                            if openai_response.status_code == 402:
+                                raise GeminiConfigurationError(
+                                    "Omniroute proxy returned 402 (Payment Required) on fallback. "
+                                    "Please check your API key, billing status, or funds/credits on your Omniroute console. "
+                                    f"Response details: {openai_response.text[:200]}"
+                                )
+                            openai_response.raise_for_status()
+                            text = await _get_response_text(openai_response)
+                            return parse_generated_patch(text)
+                        except GeminiConfigurationError:
+                            raise
+                        except Exception:
+                            pass
+
+                    response.raise_for_status()
+                    text = await _get_response_text(response)
+                    return parse_generated_patch(text)
                 except httpx.HTTPStatusError as e:
                     if e.response is not None and e.response.status_code == 402:
                         raise GeminiConfigurationError(

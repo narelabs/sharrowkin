@@ -71,8 +71,8 @@ class MemoryBridge:
             embedding = HashEmbeddingModel().encode(task)
 
         # 2. Query trace memory (Trace Replay) - похожие решения
-        # ✅ OPTIMIZE: Limit to 2 traces instead of 3
-        traces = self.trace_memory.find_similar_traces(task, embedding, limit=2)
+        # ✅ OPTIMIZE: Limit to 5 traces instead of 2 for better context
+        traces = self.trace_memory.find_similar_traces(task, embedding, limit=5)
         similar_solutions = []
         trace_replay_context = ""
         if traces:
@@ -80,12 +80,12 @@ class MemoryBridge:
             for idx, t in enumerate(traces, 1):
                 trace_replay_context += f"\n[Solution {idx}] Task: {t['task']}\n"
                 trace_replay_context += f"  Similarity: {t['similarity']:.2f}\n"
-                trace_replay_context += f"  Tools Used: {', '.join(t['tools_used'][:3])}\n"  # ✅ Limit to 3 tools
+                trace_replay_context += f"  Tools Used: {', '.join(t['tools_used'][:5])}\n"  # ✅ Increased to 5 tools
 
                 solution_data = {
                     "task": t['task'],
                     "similarity": t['similarity'],
-                    "tools_used": t['tools_used'][:3],  # ✅ Limit to 3 tools
+                    "tools_used": t['tools_used'][:5],  # ✅ Increased to 5 tools
                     "actions": [],
                     "result": ""
                 }
@@ -93,20 +93,20 @@ class MemoryBridge:
                 if "summary" in t:
                     sum_data = t["summary"]
                     trace_replay_context += f"  Key Actions:\n"
-                    # ✅ OPTIMIZE: Limit to 3 actions instead of 5
-                    for act in sum_data.get("brief_actions", [])[:3]:
-                        trace_replay_context += f"    * {act[:80]}\n"  # ✅ Truncate long actions
-                        solution_data["actions"].append(act[:80])
-                    # ✅ OPTIMIZE: Limit result to 200 chars instead of 300
-                    result = sum_data.get('brief_final_answer', '')[:200]
+                    # ✅ OPTIMIZE: Increased to 5 actions for better context
+                    for act in sum_data.get("brief_actions", [])[:5]:
+                        trace_replay_context += f"    * {act[:150]}\n"  # ✅ Increased to 150 chars
+                        solution_data["actions"].append(act[:150])
+                    # ✅ OPTIMIZE: Increased result to 500 chars for full context
+                    result = sum_data.get('brief_final_answer', '')[:500]
                     trace_replay_context += f"  Result: {result}\n"
                     solution_data["result"] = result
                 else:
                     trace_replay_context += f"  Actions:\n"
-                    for act in t['actions'][:3]:  # ✅ Limit to 3 actions
-                        trace_replay_context += f"    * {act[:80]}\n"  # ✅ Truncate
-                        solution_data["actions"].append(act[:80])
-                    result = t['final_answer'][:200]  # ✅ Limit to 200 chars
+                    for act in t['actions'][:5]:  # ✅ Increased to 5 actions
+                        trace_replay_context += f"    * {act[:150]}\n"  # ✅ Increased to 150 chars
+                        solution_data["actions"].append(act[:150])
+                    result = t['final_answer'][:500]  # ✅ Increased to 500 chars
                     trace_replay_context += f"  Result: {result}\n"
                     solution_data["result"] = result
 
@@ -151,7 +151,7 @@ class MemoryBridge:
         dsm_segments = []
         dsm_context_text = ""
         if self.enabled and self.dsm is not None:
-            dsm_context: ActiveContext = self.dsm.active_context(task, k=5)
+            dsm_context: ActiveContext = self.dsm.active_context(task, k=10)  # ✅ Increased from 5 to 10
             dsm_context_text = dsm_context.context_text
             for route_result in dsm_context.selected:
                 seg = route_result.segment

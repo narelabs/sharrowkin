@@ -244,9 +244,11 @@ class GeminiClient:
                 # Use OpenAI format directly for EcoMagent and similar APIs
                 url = f"{base_url}/chat/completions"
                 headers = {
-                    "Authorization": f"Bearer {self.omniroute_token}",
                     "Content-Type": "application/json",
                 }
+                # Only add Authorization header if token is not empty
+                if self.omniroute_token:
+                    headers["Authorization"] = f"Bearer {self.omniroute_token}"
                 payload = {
                     "model": self.omniroute_model,
                     "messages": [
@@ -281,9 +283,10 @@ class GeminiClient:
                 if response.status_code == 404 and not is_openai_compatible:
                     openai_url = f"{base_url}/chat/completions"
                     openai_headers = {
-                        "Authorization": f"Bearer {self.omniroute_token}",
                         "Content-Type": "application/json",
                     }
+                    if self.omniroute_token:
+                        openai_headers["Authorization"] = f"Bearer {self.omniroute_token}"
                     openai_payload = {
                         "model": self.omniroute_model,
                         "messages": [
@@ -456,6 +459,7 @@ class GeminiClient:
         previous_error: str = "",
         action_history: list[str] = None,
         file_contents: dict[str, str] = None,
+        conversation_history: list[dict] = None,
     ) -> GeneratedPatch:
         if not self.api_key and not self.omniroute_base_url:
             raise GeminiConfigurationError(
@@ -475,13 +479,20 @@ class GeminiClient:
                 "content-type": "application/json",
             }
             system_prompt = _autonomous_json_system_prompt()
+
+            # Build messages with conversation history
+            messages = []
+            if conversation_history:
+                # Add conversation history (last 10 messages to avoid context overflow)
+                messages.extend(conversation_history[-10:])
+            # Add current task as the latest user message
+            messages.append({"role": "user", "content": prompt})
+
             payload = {
                 "model": self.omniroute_model,
                 "max_tokens": 8192,
                 "system": system_prompt,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
+                "messages": messages,
                 "temperature": 0.2,
                 "stream": False,  # Explicitly request non-streaming response
             }
@@ -510,9 +521,10 @@ class GeminiClient:
                         # Try OpenAI-compatible chat completion endpoint as fallback
                         openai_url = f"{base_url}/chat/completions"
                         openai_headers = {
-                            "Authorization": f"Bearer {self.omniroute_token}",
                             "Content-Type": "application/json",
                         }
+                        if self.omniroute_token:
+                            openai_headers["Authorization"] = f"Bearer {self.omniroute_token}"
                         openai_payload = {
                             "model": self.omniroute_model,
                             "messages": [

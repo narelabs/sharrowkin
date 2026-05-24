@@ -264,6 +264,47 @@ def parse_python_summary(relative_path: str, source: str) -> FileSummary:
 
 
 def scan_workspace(workspace: Path) -> list[FileSummary]:
+    """
+    Scan workspace and extract structure from all source files.
+
+    This tool performs AST-level analysis of the codebase to understand its structure.
+    Use it at the beginning of a task to understand what code exists.
+
+    Args:
+        workspace: Absolute path to the project root directory
+
+    Returns:
+        List of FileSummary objects, each containing:
+        - path: Relative file path (e.g., "src/main.py")
+        - language: File extension (e.g., "py", "ts", "js")
+        - line_count: Number of lines in the file
+        - imports: List of imported modules (Python only)
+        - symbols: List of top-level symbols (classes, functions, etc.)
+        - error: Parse error message if file couldn't be analyzed
+
+    What gets scanned:
+        - Python files (.py): Full AST analysis with imports, classes, functions
+        - TypeScript/JavaScript (.ts, .tsx, .js, .jsx): Basic structure
+        - Config files (.json, .yaml, .toml, .md): Line counts only
+        - Ignores: node_modules, venv, __pycache__, .git, dist, build
+
+    Example usage:
+        summaries = scan_workspace(Path("/project"))
+        for summary in summaries:
+            print(f"{summary.path}: {len(summary.symbols)} symbols")
+
+    Best practices:
+        - Run this ONCE at the start of a task to understand the codebase
+        - Don't run repeatedly - it's expensive (scans all files)
+        - Use the results to understand project structure before making changes
+        - Check summary.imports to understand dependencies
+        - Check summary.symbols to find classes and functions
+
+    Performance note:
+        - Scans all source files (can be 100+ files)
+        - Takes 1-3 seconds on typical projects
+        - Results are cached by the agent system
+    """
     summaries: list[FileSummary] = []
     for path in iter_source_files(workspace):
         relative_path = path.relative_to(workspace).as_posix()
@@ -295,6 +336,69 @@ def summarize_workspace(summaries: list[FileSummary], max_files: int = 60) -> st
 
 
 def apply_changes(workspace: Path, changes: list[ProposedFileChange]) -> PatchResult:
+    """
+    Apply file changes to the workspace (create, modify, or overwrite files).
+
+    This is the PRIMARY tool for making code changes. Use it to create new files,
+    modify existing files, or update multiple files at once.
+
+    Args:
+        workspace: Absolute path to the project root directory
+        changes: List of ProposedFileChange objects, each containing:
+            - path: Relative path from workspace (e.g., "src/main.py", "README.md")
+            - content: Complete new file content (NOT a diff - full file text)
+
+    Returns:
+        PatchResult with:
+        - diff: Unified diff showing what changed (git diff format)
+        - changed_files: List of file paths that were actually modified
+
+    CRITICAL RULES:
+        1. ALWAYS provide COMPLETE file content, not partial changes
+        2. Use RELATIVE paths from workspace root (e.g., "src/app.py", NOT "/home/user/project/src/app.py")
+        3. If file doesn't exist, it will be created
+        4. If file exists, it will be COMPLETELY REPLACED with new content
+        5. Preserve existing code you don't want to change - include it in content
+
+    Example usage:
+        # Create a new file
+        changes = [
+            ProposedFileChange(
+                path="src/hello.py",
+                content="def hello():\n    print('Hello, world!')\n"
+            )
+        ]
+        result = apply_changes(Path("/project"), changes)
+
+        # Modify existing file (provide FULL content)
+        changes = [
+            ProposedFileChange(
+                path="README.md",
+                content="# My Project\n\nThis is the updated README.\n"
+            )
+        ]
+        result = apply_changes(Path("/project"), changes)
+
+        # Update multiple files at once
+        changes = [
+            ProposedFileChange(path="src/main.py", content="...full content..."),
+            ProposedFileChange(path="src/utils.py", content="...full content..."),
+        ]
+        result = apply_changes(Path("/project"), changes)
+
+    Best practices:
+        - Read the file first if you need to preserve existing code
+        - Provide complete file content, not just the changed lines
+        - Use relative paths (src/file.py) not absolute (/home/user/project/src/file.py)
+        - Check result.diff to see what actually changed
+        - Run tests after applying changes to verify nothing broke
+
+    Common mistakes to AVOID:
+        ❌ Providing only changed lines (must provide FULL file)
+        ❌ Using absolute paths (use relative from workspace)
+        ❌ Forgetting to include unchanged code (file will be truncated)
+        ❌ Not reading existing file before modifying it
+    """
     originals: dict[str, str] = {}
     next_contents: dict[str, str] = {}
     changed_files: list[str] = []
@@ -343,7 +447,45 @@ def git_diff(workspace: Path) -> str:
     return result.stdout
 
 
-def run_pytest(workspace: Path, timeout_seconds: int = 120) -> TestResult:
+def run_pytest(workspace: Path, timeout_seconds: int = 300) -> TestResult:
+    """
+    Run pytest test suite in the workspace directory.
+
+    This tool executes all tests found by pytest in the workspace. Use this to validate
+    that your code changes don't break existing functionality.
+
+    Args:
+        workspace: Absolute path to the project root directory
+        timeout_seconds: Maximum time to wait for tests (default: 300s / 5 minutes)
+
+    Returns:
+        TestResult with:
+        - success: True if all tests passed (exit code 0) or no tests found (exit code 5)
+        - exit_code: pytest exit code (0=passed, 1=failed, 5=no tests)
+        - output: Last 12,000 chars of test output (stdout + stderr combined)
+
+    Common exit codes:
+        0 - All tests passed
+        1 - Tests failed
+        2 - Test execution interrupted
+        3 - Internal error
+        4 - pytest command line usage error
+        5 - No tests collected (treated as success)
+
+    Example usage:
+        result = run_pytest(Path("/home/user/project"))
+        if result.success:
+            print("All tests passed!")
+        else:
+            print(f"Tests failed with exit code {result.exit_code}")
+            print(result.output)
+
+    Best practices:
+        - Always run tests after making code changes
+        - Check result.success before proceeding
+        - If tests fail, read result.output to understand what broke
+        - Fix failing tests before moving to next task
+    """
     result = subprocess.run(
         ["python", "-m", "pytest"],
         cwd=workspace,
@@ -410,7 +552,50 @@ def fetch_url(url: str) -> str:
 
 
 def run_terminal_command(workspace: Path, command: str, timeout_seconds: int = 120) -> TestResult:
-    """Run a policy-filtered terminal command within the workspace."""
+    """
+    Execute a shell command in the workspace directory with safety filtering.
+
+    This tool runs terminal commands like npm install, git status, or custom scripts.
+    Commands are filtered for security - network tools (curl, wget, nc) are blocked.
+
+    Args:
+        workspace: Absolute path to the project root (command runs in this directory)
+        command: Shell command to execute (e.g., "npm install", "git status")
+        timeout_seconds: Maximum execution time (default: 120s / 2 minutes)
+
+    Returns:
+        TestResult with:
+        - success: True if exit code is 0
+        - exit_code: Command exit code (0=success, non-zero=error, -1=timeout, -2=execution failed)
+        - output: Combined stdout and stderr
+
+    Security restrictions:
+        - Blocked commands: curl, wget, nc, netcat (network tools)
+        - No shell injection - commands are parsed safely
+        - Runs in workspace directory only
+
+    Example usage:
+        # Install dependencies
+        result = run_terminal_command(Path("/project"), "npm install")
+
+        # Check git status
+        result = run_terminal_command(Path("/project"), "git status")
+
+        # Run build script
+        result = run_terminal_command(Path("/project"), "npm run build")
+
+    Best practices:
+        - Use absolute paths in workspace parameter (not relative)
+        - Check result.success before assuming command worked
+        - Read result.output to understand errors
+        - Avoid chaining commands with && - run separately for better error handling
+        - Don't use network commands (curl, wget) - they're blocked for security
+
+    Common errors:
+        - Exit code -1: Command timed out (increase timeout_seconds)
+        - Exit code -2: Command execution failed (check command syntax)
+        - Exit code 127: Command not found (check if tool is installed)
+    """
     try:
         argv = split_safe_command(command)
         result = subprocess.run(

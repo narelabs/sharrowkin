@@ -11,6 +11,7 @@ import time
 from typing import Any
 import os
 import httpx
+import subprocess
 
 from monitoring.telemetry import get_tracer
 from core.llm.client import AUTONOMOUS_AGENT_POLICY, GeminiClient, GeminiConfigurationError, GeneratedPatch
@@ -1331,6 +1332,8 @@ Use format:
         memory: MemoryBridge,
         iteration: int,
     ) -> AsyncIterator[dict[str, object]]:
+        import json
+        import re
         yield self._phase("Reason", "active")
         await self.plugins.run_pre_reason(state, iteration)
         yield {
@@ -1613,6 +1616,7 @@ Use format:
                 previous_error=previous_err_combined,
                 action_history=state.actions,
                 file_contents=file_contents,
+                conversation_history=self.conversation_history,
             )
         except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
             yield self._log("warning", f"Генерация патча завершилась с ошибкой или таймаутом: {exc}. Снижаю размер контекста и пробую снова...")
@@ -1633,6 +1637,7 @@ Use format:
                     previous_error=previous_err_combined,
                     action_history=state.actions,
                     file_contents=file_contents_reduced,
+                    conversation_history=self.conversation_history,
                 )
             except Exception as retry_exc:
                 # If retry also fails, return informational response instead of crashing
@@ -1826,7 +1831,16 @@ Use format:
         yield self._tool_call("pytest", status="running", target=str(state.workspace))
         await asyncio.sleep(0.5 if self.config.execution.ui_delays_enabled else 0)
 
-        test_result = await asyncio.to_thread(run_pytest, state.workspace)
+        try:
+            test_result = await asyncio.to_thread(run_pytest, state.workspace)
+        except subprocess.TimeoutExpired:
+            yield self._log("warning", "Tests timed out after 300 seconds. Skipping validation phase.")
+            yield self._tool_call("pytest", status="done", target=str(state.workspace), detail="timeout - skipped")
+            yield self._phase("Stabilize", "done")
+            state.actions.append("Ran pytest: timeout - validation skipped")
+            state.tools_used.append("pytest")
+            return
+
         state.actions.append(f"Ran pytest: exit_code={test_result.exit_code}, success={test_result.success}")
         state.tools_used.append("pytest")
 

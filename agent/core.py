@@ -1559,6 +1559,38 @@ Use format:
         context_size_kb = context_size / 1024
         yield self._log("info", f"Total context size: {context_size_kb:.1f} KB ({context_size:,} chars)")
 
+        # ✅ PROACTIVE CONTEXT REDUCTION: Limit to 100KB to prevent connection failures
+        MAX_CONTEXT_SIZE = 100_000  # 100 KB limit
+        if context_size > MAX_CONTEXT_SIZE:
+            yield self._log("warning", f"Context too large ({context_size_kb:.1f} KB), reducing to {MAX_CONTEXT_SIZE/1024:.1f} KB")
+
+            # Reduce each component proportionally
+            reduction_ratio = MAX_CONTEXT_SIZE / context_size
+
+            workspace_summary_enriched = workspace_summary_enriched[:int(len(workspace_summary_enriched) * reduction_ratio)]
+            if semantic_context:
+                semantic_context = semantic_context[:int(len(semantic_context) * reduction_ratio)]
+            if memory_context_enriched:
+                memory_context_enriched = memory_context_enriched[:int(len(memory_context_enriched) * reduction_ratio)]
+
+            # Rebuild full_context
+            full_context = workspace_summary_enriched
+            if semantic_context:
+                full_context += f"\n\n{semantic_context}"
+            if memory_context_enriched:
+                full_context += f"\n\n{memory_context_enriched}"
+
+            if conversation_context:
+                full_context = f"{conversation_context}\n\n{full_context}"
+
+            # Truncate if still too large
+            if len(full_context) > MAX_CONTEXT_SIZE:
+                full_context = full_context[:MAX_CONTEXT_SIZE] + "\n... [truncated to fit context limit]"
+
+            context_size = len(full_context)
+            context_size_kb = context_size / 1024
+            yield self._log("info", f"Reduced context size: {context_size_kb:.1f} KB ({context_size:,} chars)")
+
         # --- Generate patch with enriched context ---
         yield self._tool_call("llm_generate", status="running", target=self.gemini.model_id if hasattr(self.gemini, 'model_id') else "LLM", detail=f"iteration {iteration}")
         await asyncio.sleep(0.4 if self.config.execution.ui_delays_enabled else 0)

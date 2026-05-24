@@ -13,7 +13,7 @@ import os
 import httpx
 
 from monitoring.telemetry import get_tracer
-from core.llm.client import AUTONOMOUS_AGENT_POLICY, GeminiClient, GeminiConfigurationError
+from core.llm.client import AUTONOMOUS_AGENT_POLICY, GeminiClient, GeminiConfigurationError, GeneratedPatch
 from core import types
 from memory import MemoryBridge
 
@@ -1559,8 +1559,8 @@ Use format:
         context_size_kb = context_size / 1024
         yield self._log("info", f"Total context size: {context_size_kb:.1f} KB ({context_size:,} chars)")
 
-        # ✅ PROACTIVE CONTEXT REDUCTION: Limit to 100KB to prevent connection failures
-        MAX_CONTEXT_SIZE = 100_000  # 100 KB limit
+        # ✅ PROACTIVE CONTEXT REDUCTION: Limit to 40KB to prevent API errors
+        MAX_CONTEXT_SIZE = 40_000  # 40 KB limit (reduced for API stability)
         if context_size > MAX_CONTEXT_SIZE:
             yield self._log("warning", f"Context too large ({context_size_kb:.1f} KB), reducing to {MAX_CONTEXT_SIZE/1024:.1f} KB")
 
@@ -1605,7 +1605,7 @@ Use format:
                 action_history=state.actions,
                 file_contents=file_contents,
             )
-        except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
+        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
             yield self._log("warning", f"Генерация патча завершилась с ошибкой или таймаутом: {exc}. Снижаю размер контекста и пробую снова...")
 
             # Reduce context dynamically
@@ -1616,14 +1616,24 @@ Use format:
                 file_contents_reduced[path] = content[:4000] + "\n... [truncated due to timeout] ..."
 
             # Retry once with reduced context
-            generated = await self.gemini.generate_patch(
-                task=state.task,
-                workspace_summary=ws_summary_reduced,
-                memory_context=mem_context_reduced,
-                previous_error=previous_err_combined,
-                action_history=state.actions,
-                file_contents=file_contents_reduced,
-            )
+            try:
+                generated = await self.gemini.generate_patch(
+                    task=state.task,
+                    workspace_summary=ws_summary_reduced,
+                    memory_context=mem_context_reduced,
+                    previous_error=previous_err_combined,
+                    action_history=state.actions,
+                    file_contents=file_contents_reduced,
+                )
+            except Exception as retry_exc:
+                # If retry also fails, return informational response instead of crashing
+                yield self._log("error", f"Вторая попытка также завершилась ошибкой: {retry_exc}. Возвращаю информационный ответ.")
+                generated = GeneratedPatch(
+                    rationale=f"Не удалось сгенерировать патч из-за таймаута LLM. Задача: {state.task}",
+                    subtasks=[],
+                    files={},
+                    commands=[]
+                )
             
         state.last_rationale = generated.rationale
         await self.plugins.run_post_reason(state, generated, iteration)

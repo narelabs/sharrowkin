@@ -2,10 +2,7 @@ import time
 import sys
 from pathlib import Path
 
-# Добавляем src в PYTHONPATH для импортов
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
-from dsm.core import DynamicSegmentedMemory
+from memory.dsm.core.memory import DynamicSegmentedMemory
 
 def run_tests():
     print("Start Testing DSM 3.0 Thermodynamics & Search...\n")

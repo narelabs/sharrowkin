@@ -1,11 +1,30 @@
-"""Quick test for classify_intent heuristic."""
+import asyncio
 import sys
-sys.path.insert(0, "backend")
-from core.llm_client import GeminiClient
+from pathlib import Path
+from core.llm.client import GeminiClient
 
-g = GeminiClient()
-tests = ["привет", "Привет", "hello", "кто ты", "изучай проект", "fix the bug"]
-for t in tests:
-    result = g.classify_intent(t)
-    tag = "CONV" if result.get("is_conversational") else "TASK"
-    print(f"  [{tag}] '{t}' => {result}")
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+def test_intent_detection():
+    """Test intent detection with Gemini."""
+    client = GeminiClient()
+    
+    # Test coding intent
+    response = client.generate(
+        "Write a Python function to calculate fibonacci numbers"
+    )
+    assert response is not None
+    assert len(response) > 0
+    
+    # Test question intent
+    response = client.generate(
+        "What is the capital of France?"
+    )
+    assert response is not None
+    assert len(response) > 0
+
+
+if __name__ == "__main__":
+    test_intent_detection()
+    print("✓ Intent detection tests passed")

@@ -52,6 +52,12 @@ class MemoryBridge:
         return self.rld is not None and self.dsm is not None
 
     def recall(self, task: str) -> str:
+        """Retrieve memory context for task (legacy string format for backward compatibility)."""
+        structured = self.recall_structured(task)
+        return structured["full_context"]
+
+    def recall_structured(self, task: str) -> dict:
+        """Retrieve structured memory context with separate sections for better LLM prompting."""
         # 1. Get query embedding dynamically
         embedding = [0.0] * 128
         if self.rld and self.rld.embedding_model:
@@ -64,57 +70,111 @@ class MemoryBridge:
             from memory.dsm.indexing.embedding import HashEmbeddingModel
             embedding = HashEmbeddingModel().encode(task)
 
-        # 2. Query trace memory (Trace Replay)
-        traces = self.trace_memory.find_similar_traces(task, embedding, limit=2)
+        # 2. Query trace memory (Trace Replay) - похожие решения
+        traces = self.trace_memory.find_similar_traces(task, embedding, limit=3)
+        similar_solutions = []
         trace_replay_context = ""
         if traces:
-            trace_replay_context = "\n\n=== REASONING TRACE REPLAY (Matched Past Trajectories) ===\n"
-            for t in traces:
-                trace_replay_context += f"\n- Similar Past Task: {t['task']}\n"
-                trace_replay_context += f"  Similarity: {t['similarity']}\n"
+            trace_replay_context = "\n\n=== REASONING TRACE REPLAY (Similar Past Solutions) ===\n"
+            for idx, t in enumerate(traces, 1):
+                trace_replay_context += f"\n[Solution {idx}] Task: {t['task']}\n"
+                trace_replay_context += f"  Similarity: {t['similarity']:.2f}\n"
                 trace_replay_context += f"  Tools Used: {', '.join(t['tools_used'])}\n"
+
+                solution_data = {
+                    "task": t['task'],
+                    "similarity": t['similarity'],
+                    "tools_used": t['tools_used'],
+                    "actions": [],
+                    "result": ""
+                }
+
                 if "summary" in t:
                     sum_data = t["summary"]
-                    trace_replay_context += f"  Key States Visited:\n"
-                    for s_sum in sum_data.get("summarized_states", []):
-                        trace_replay_context += f"    * {s_sum}\n"
                     trace_replay_context += f"  Key Actions:\n"
-                    for act in sum_data.get("brief_actions", []):
+                    for act in sum_data.get("brief_actions", [])[:5]:
                         trace_replay_context += f"    * {act}\n"
-                    trace_replay_context += f"  Brief Final Answer:\n    {sum_data.get('brief_final_answer', '')}\n"
+                        solution_data["actions"].append(act)
+                    result = sum_data.get('brief_final_answer', '')[:300]
+                    trace_replay_context += f"  Result: {result}\n"
+                    solution_data["result"] = result
                 else:
-                    trace_replay_context += f"  Actions taken:\n"
-                    for act in t['actions']:
+                    trace_replay_context += f"  Actions:\n"
+                    for act in t['actions'][:5]:
                         trace_replay_context += f"    * {act}\n"
-                    trace_replay_context += f"  Resulting Answer:\n    {t['final_answer'][:500]}...\n"
+                        solution_data["actions"].append(act)
+                    result = t['final_answer'][:300]
+                    trace_replay_context += f"  Result: {result}\n"
+                    solution_data["result"] = result
 
-        # 3. Retrieve memory field state attractors
-        associations = self.memory_field.get_top_associations(limit=5)
+                similar_solutions.append(solution_data)
+
+        # 3. Retrieve memory field state attractors - стратегии
+        associations = self.memory_field.get_top_associations(limit=8)
+        strategy_hints = []
         assoc_context = ""
         if associations:
-            assoc_context = "\n\n=== MEMORYFIELD ATTRACTOR NETWORKS ===\n"
+            assoc_context = "\n\n=== MEMORYFIELD STRATEGY ATTRACTORS ===\n"
+            assoc_context += "Successful phase transitions (learned from past executions):\n"
             for a in associations:
-                assoc_context += f"- Link: {a['source']} -> {a['target']} (strength: {a['weight']})\n"
+                assoc_context += f"- {a['source']} → {a['target']} (strength: {a['weight']:.3f})\n"
+                strategy_hints.append({
+                    "from": a['source'],
+                    "to": a['target'],
+                    "strength": a['weight']
+                })
 
-        if not self.enabled:
-            return self._fallback_context(task) + trace_replay_context + assoc_context
-        if self.rld is None or self.dsm is None:
-            return self._fallback_context(task) + trace_replay_context + assoc_context
+        # 4. RLD active genes - reasoning patterns
+        rld_genes = []
+        rld_context_text = ""
+        if self.enabled and self.rld is not None:
+            rld_context: RLDContext = self.rld.active_context(task)
+            rld_context_text = rld_context.context_text
+            for activated in rld_context.activated:
+                gene = activated.gene
+                rld_genes.append({
+                    "pattern": gene.pattern,
+                    "success_rate": gene.success_count / max(1, gene.activation_count),
+                    "tools": gene.tools_used,
+                    "weight": activated.weight
+                })
 
-        rld_context: RLDContext = self.rld.active_context(task)
-        dsm_context: ActiveContext = self.dsm.active_context(task, k=4)
-        combined = "\n\n".join(
-            [
-                rld_context.context_text,
-                "DSM ACTIVE CONTEXT",
-                dsm_context.context_text,
-            ]
-        )
+        # 5. DSM active segments - project knowledge
+        dsm_segments = []
+        dsm_context_text = ""
+        if self.enabled and self.dsm is not None:
+            dsm_context: ActiveContext = self.dsm.active_context(task, k=5)
+            dsm_context_text = dsm_context.context_text
+            for route_result in dsm_context.selected:
+                seg = route_result.segment
+                dsm_segments.append({
+                    "description": seg.description,
+                    "category": "/".join(seg.category_path),
+                    "importance": seg.priorities.importance,
+                    "text_preview": seg.text[:200]
+                })
+
+        # 6. Build combined context
+        combined = ""
+        if rld_context_text:
+            combined += rld_context_text + "\n\n"
+        if dsm_context_text:
+            combined += "DSM ACTIVE CONTEXT\n" + dsm_context_text + "\n\n"
+
         # If memory returned nothing useful, supplement with workspace files
-        if "No reasoning genes" in combined and "No active memory" in combined:
-            combined += "\n\n" + self._fallback_context(task)
+        if not combined or ("No reasoning genes" in combined and "No active memory" in combined):
+            combined += self._fallback_context(task) + "\n\n"
 
-        return combined + trace_replay_context + assoc_context
+        combined += trace_replay_context + assoc_context
+
+        return {
+            "full_context": combined,
+            "similar_solutions": similar_solutions,
+            "strategy_hints": strategy_hints,
+            "rld_genes": rld_genes,
+            "dsm_segments": dsm_segments,
+            "has_memory": bool(rld_genes or dsm_segments or similar_solutions)
+        }
 
     def _fallback_context(self, task: str) -> str:
         """Read key workspace files as fallback when memory is empty."""

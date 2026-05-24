@@ -65,6 +65,7 @@ class AgentRunState:
     tools_used: list[str]
     workspace_summary: str = ""
     memory_context: str = ""
+    memory_context_structured: dict = field(default_factory=dict)  # NEW: structured memory
     last_error: str = ""
     final_diff: str = ""
     changes_made: bool = False
@@ -379,21 +380,26 @@ class SharrowkinAgent:
 
     def _format_history(self) -> str:
         """Format recent conversation history for LLM context."""
+        print(f"[DEBUG] _format_history called. Total messages: {len(self.conversation_history)}")
         if len(self.conversation_history) <= 1:
+            print(f"[DEBUG] Not enough messages for history (need >1, have {len(self.conversation_history)})")
             return ""
         # Take last 10 messages (excluding the current one which is last)
         recent = self.conversation_history[-11:-1]
         if not recent:
+            print(f"[DEBUG] No recent messages after slicing")
             return ""
         lines = []
         for msg in recent:
             role = "User" if msg["role"] == "user" else "Sharrowkin"
-            # Truncate long messages
+            # ✅ OPTIMIZE: Truncate long messages more aggressively
             content = msg["content"]
-            if len(content) > 500:
-                content = content[:500] + "..."
+            if len(content) > 300:  # Reduced from 500
+                content = content[:300] + "..."
             lines.append(f"{role}: {content}")
-        return "CONVERSATION HISTORY:\n" + "\n\n".join(lines)
+        result = "CONVERSATION HISTORY:\n" + "\n\n".join(lines)
+        print(f"[DEBUG] Formatted history with {len(recent)} messages, {len(result)} chars")
+        return result
 
     # --- main run loop ------------------------------------------------------
     async def run(self, task: str, workspace_path: str, plan_mode: str = "autonomous") -> AsyncIterator[dict[str, object]]:
@@ -432,6 +438,7 @@ class SharrowkinAgent:
 
             # Store user message in conversation history
             self.conversation_history.append({"role": "user", "content": task})
+            print(f"[DEBUG] Conversation history after user message: {len(self.conversation_history)} messages")
 
             # --- Custom Strategic Ideas Intervention ---
             task_lower = task.lower().strip()
@@ -598,7 +605,12 @@ class SharrowkinAgent:
 
                                 # Check if we have a GitHub token
                                 if not SETTINGS.github_token:
-                                    yield {"type": "content", "content": "❌ GitHub не подключен. Пожалуйста, подключите GitHub в настройках."}
+                                    error_msg = "❌ GitHub не подключен. Пожалуйста, подключите GitHub в настройках."
+                                    yield {"type": "content", "content": error_msg}
+                                    # ✅ SAVE AGENT RESPONSE TO CONVERSATION HISTORY
+                                    self.conversation_history.append({"role": "assistant", "content": error_msg})
+                                    if len(self.conversation_history) > 20:
+                                        self.conversation_history = self.conversation_history[-20:]
                                     yield self._status("done")
                                     return
 
@@ -654,7 +666,11 @@ class SharrowkinAgent:
                                 if len(ws_summary_clipped) > 8000:
                                     ws_summary_clipped = ws_summary_clipped[:8000] + "\n... [truncated for brevity] ..."
 
+                                # ✅ ADD CONVERSATION HISTORY
+                                conversation_context = self._format_history()
+
                                 rich_prompt = (
+                                    f"{conversation_context}\n\n" if conversation_context else ""
                                     f"User request: {state.task}\n\n"
                                     f"Workspace README.md:\n{readme_content}\n\n"
                                     f"Workspace AST summary (clipped):\n{ws_summary_clipped}\n\n"
@@ -681,9 +697,16 @@ class SharrowkinAgent:
                             state.last_rationale = f"Не удалось сгенерировать ответ: {exc}"
                         
                         yield self._phase("Reason", "done")
-                        
+
                         if state.last_rationale:
                             yield {"type": "content", "content": state.last_rationale}
+                            # ✅ SAVE AGENT RESPONSE TO CONVERSATION HISTORY
+                            self.conversation_history.append({"role": "assistant", "content": state.last_rationale})
+                            print(f"[DEBUG] Saved assistant response to conversation_history. Total messages: {len(self.conversation_history)}")
+                            print(f"[DEBUG] Last 3 messages: {[(m['role'], m['content'][:50]) for m in self.conversation_history[-3:]]}")
+                            # Keep history manageable (last 20 messages)
+                            if len(self.conversation_history) > 20:
+                                self.conversation_history = self.conversation_history[-20:]
                         yield self._status("done")
                         yield self._log("success", "Informational analysis completed.")
                         return
@@ -744,7 +767,12 @@ class SharrowkinAgent:
                                 )
 
                                 # Wait for user selection (frontend will send new message with selected repo)
-                                yield {"type": "content", "content": "👆 Выберите репозиторий из списка выше"}
+                                selector_msg = "👆 Выберите репозиторий из списка выше"
+                                yield {"type": "content", "content": selector_msg}
+                                # ✅ SAVE AGENT RESPONSE TO CONVERSATION HISTORY
+                                self.conversation_history.append({"role": "assistant", "content": selector_msg})
+                                if len(self.conversation_history) > 20:
+                                    self.conversation_history = self.conversation_history[-20:]
                                 yield self._status("waiting_repo_selection")
                                 return
                         except Exception as e:
@@ -759,19 +787,45 @@ class SharrowkinAgent:
                 success = False
                 for iteration in range(1, self.max_iterations + 1):
                     with self._tracer.start_as_current_span("phase_reason"):
-                        async for event in self._reason(state, memory, iteration): yield event
+                        async for event in self._reason(state, memory, iteration):
+                            yield event
 
                     if not state.changes_made:
                         success = True
                         break
 
                     with self._tracer.start_as_current_span("phase_stabilize"):
-                        async for event in self._stabilize(state, memory, iteration): yield event
+                        stabilize_result = None
+                        async for event in self._stabilize(state, memory, iteration):
+                            # Check if stabilize returned retry signal
+                            if isinstance(event, dict) and event.get("type") == "phase":
+                                if event.get("status") == "retry":
+                                    stabilize_result = "retry"
+                                elif event.get("status") == "failed":
+                                    stabilize_result = "failed"
+                                elif event.get("status") == "done":
+                                    stabilize_result = "done"
+                            yield event
 
-                    if not state.last_error:
+                    # Handle stabilize result
+                    if stabilize_result == "done":
+                        # Tests passed - success!
+                        success = True
+                        break
+                    elif stabilize_result == "retry":
+                        # Tests failed but we can retry - continue to next iteration
+                        yield self._log("info", f"Retrying with error context (iteration {iteration + 1}/{self.max_iterations})...")
+                        continue
+                    elif stabilize_result == "failed":
+                        # Max retries reached - give up
+                        success = False
+                        break
+                    elif not state.last_error:
+                        # No error and no explicit result - assume success
                         success = True
                         break
                     else:
+                        # Legacy path: record failure and continue
                         record = FailureRecord(
                             iteration=iteration,
                             changed_files=state.current_changed_files,
@@ -779,48 +833,51 @@ class SharrowkinAgent:
                             patch_diff=state.final_diff
                         )
                         self.failure_history.append(record)
-
-                        # NEW: Analyze failure for learning
-                        failure_context = self.failure_analyzer.analyze_failure(
-                            error=state.last_error,
-                            stack_trace=state.last_error,  # TODO: Extract actual stack trace
-                            previous_attempt=state.last_rationale,
-                            diff=state.final_diff,
-                            iteration=iteration,
-                            changed_files=state.current_changed_files
-                        )
-
-                        # Store failure context in state for next Reason phase
-                        state.last_error = failure_context.to_prompt()
-
-                        # Exponential backoff before retry (Phase 1 Stability)
-                        backoff_time = 2 ** iteration
-                        yield self._log("info", f"Ожидаю {backoff_time}s перед следующей попыткой исправления (exponential backoff)...")
-                        await asyncio.sleep(backoff_time)
+                        yield self._log("warning", f"Iteration {iteration} failed, retrying...")
+                        continue
 
                 if success:
                     async for event in self._commit(state, memory):
                         yield event
                     if state.last_rationale:
                         yield {"type": "content", "content": state.last_rationale}
+                        # ✅ SAVE AGENT RESPONSE TO CONVERSATION HISTORY
+                        self.conversation_history.append({"role": "assistant", "content": state.last_rationale})
+                        if len(self.conversation_history) > 20:
+                            self.conversation_history = self.conversation_history[-20:]
                     yield self._status("done")
                     yield self._log("success", "Task stabilized and stored in local memory.")
                 else:
                     if state.last_error:
-                        yield {"type": "content", "content": f"⚠️ **Self-healing loop reached the iteration limit.**\n\nLast error:\n```log\n{state.last_error}\n```"}
+                        error_msg = f"⚠️ **Self-healing loop reached the iteration limit.**\n\nLast error:\n```log\n{state.last_error}\n```"
+                        yield {"type": "content", "content": error_msg}
+                        # ✅ SAVE AGENT RESPONSE TO CONVERSATION HISTORY
+                        self.conversation_history.append({"role": "assistant", "content": error_msg})
+                        if len(self.conversation_history) > 20:
+                            self.conversation_history = self.conversation_history[-20:]
                     yield self._status("error")
                     yield self._log("error", "Self-healing loop reached the iteration limit.")
             except GeminiConfigurationError as exc:
                 yield self._phase("Reason", "error")
                 yield self._thinking(f"API key not configured: {exc}")
-                yield {"type": "content", "content": f"⚠️ **API ключ не настроен.**\n\nДобавьте `GEMINI_API_KEY` в файл `backend/backend/.env` для работы с кодом.\n\n```\n{exc}\n```"}
+                api_error_msg = f"⚠️ **API ключ не настроен.**\n\nДобавьте `GEMINI_API_KEY` в файл `backend/backend/.env` для работы с кодом.\n\n```\n{exc}\n```"
+                yield {"type": "content", "content": api_error_msg}
+                # ✅ SAVE AGENT RESPONSE TO CONVERSATION HISTORY
+                self.conversation_history.append({"role": "assistant", "content": api_error_msg})
+                if len(self.conversation_history) > 20:
+                    self.conversation_history = self.conversation_history[-20:]
                 yield self._status("needs_key")
                 yield self._log("error", str(exc))
             except Exception as exc:
                 await self.plugins.run_on_error(state, exc)
                 print(f"[AGENT] Cycle error: {exc}")
                 yield self._thinking(f"Error: {exc}")
-                yield {"type": "content", "content": f"⚠️ **Ошибка агента:**\n\n```\n{exc}\n```"}
+                general_error_msg = f"⚠️ **Ошибка агента:**\n\n```\n{exc}\n```"
+                yield {"type": "content", "content": general_error_msg}
+                # ✅ SAVE AGENT RESPONSE TO CONVERSATION HISTORY
+                self.conversation_history.append({"role": "assistant", "content": general_error_msg})
+                if len(self.conversation_history) > 20:
+                    self.conversation_history = self.conversation_history[-20:]
                 yield self._status("error")
                 yield self._log("error", f"Agent cycle failed: {exc}")
 
@@ -1057,17 +1114,36 @@ class SharrowkinAgent:
             "energy_ledger": self._get_energy_ledger(state, memory, "Recall"),
             "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
         }
-        yield self._log("info", "Retrieving memory context.")
-        yield self._tool_call("memory_recall", status="running", target="DSM + RLD")
+        yield self._log("info", "Retrieving memory context (DSM + RLD + TraceMemory + MemoryField).")
+        yield self._tool_call("memory_recall", status="running", target="All Memory Systems")
         await asyncio.sleep(0.3)
-        state.memory_context = await asyncio.to_thread(memory.recall, state.task)
+
+        # Get structured memory context instead of plain text
+        state.memory_context_structured = await asyncio.to_thread(memory.recall_structured, state.task)
+        state.memory_context = state.memory_context_structured["full_context"]
+
+        # Log memory utilization
+        has_memory = state.memory_context_structured.get("has_memory", False)
+        similar_count = len(state.memory_context_structured.get("similar_solutions", []))
+        rld_count = len(state.memory_context_structured.get("rld_genes", []))
+        dsm_count = len(state.memory_context_structured.get("dsm_segments", []))
+
         state.states.append(state.memory_context)
-        state.actions.append("Loaded RLD active context and DSM active context")
+        state.actions.append(f"Loaded memory: {similar_count} similar solutions, {rld_count} RLD genes, {dsm_count} DSM segments")
         state.tools_used.append("rld")
         state.tools_used.append("dsm")
+        state.tools_used.append("trace_memory")
+        state.tools_used.append("memory_field")
+
         await asyncio.sleep(0.2)
-        yield self._tool_call("memory_recall", status="done", target="DSM + RLD", detail=f"{len(state.memory_context)} chars loaded")
-        yield self._log("success", f"Memory loaded ({len(state.memory_context)} chars).")
+        detail = f"{len(state.memory_context)} chars, {similar_count} solutions, {rld_count} genes"
+        yield self._tool_call("memory_recall", status="done", target="All Memory Systems", detail=detail)
+
+        if has_memory:
+            yield self._log("success", f"Memory loaded: {similar_count} similar solutions, {rld_count} reasoning patterns.")
+        else:
+            yield self._log("warning", "Cold start: no relevant memory found, bootstrapping from workspace.")
+
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
@@ -1207,14 +1283,95 @@ class SharrowkinAgent:
             previous_err_combined = f"{failure_guidelines}\\n\\nLatest Error:\\n{state.last_error}"
 
         workspace_summary_enriched = (
-            f"=== CODEBASE HEALTH METRICS ===\\n"
-            f"Average Cyclomatic Complexity: {state.complexity_avg}\\n"
-            f"Circular Dependencies Detected: {state.circular_dependencies}\\n"
-            f"================================\\n\\n"
+            f"=== CODEBASE HEALTH METRICS ===\n"
+            f"Average Cyclomatic Complexity: {state.complexity_avg}\n"
+            f"Circular Dependencies Detected: {state.circular_dependencies}\n"
+            f"================================\n\n"
             f"{state.workspace_summary}"
         )
 
-        # --- Generate patch with file contents ---
+        # ✅ OPTIMIZE: Use short summary if conversation history exists
+        if len(self.conversation_history) > 2:
+            # Agent already knows workspace - use short summary
+            workspace_summary_enriched = (
+                f"=== CODEBASE HEALTH (cached) ===\n"
+                f"Files: {state.total_files}, Complexity: {state.complexity_avg}\n"
+                f"Circular Deps: {state.circular_dependencies}\n"
+                f"Note: Full workspace context was provided in previous messages.\n"
+                f"================================\n"
+            )
+            yield self._log("info", "Using short workspace summary (full context in conversation history)")
+
+        # --- Add Semantic Graph and Dependency Analysis to context ---
+        semantic_context = ""
+        if state.semantic_graph:
+            try:
+                from memory.semantic_context import build_semantic_context, build_dependency_context
+                from analysis.code.dependency import DependencyAnalyzer
+
+                # ✅ OPTIMIZE: Skip semantic graph if conversation history exists
+                if len(self.conversation_history) <= 2:
+                    # First request - include full semantic context
+                    semantic_context += build_semantic_context(state.semantic_graph, max_nodes=30)
+
+                    # Build dependency analysis context
+                    dep_analyzer = DependencyAnalyzer(state.workspace)
+                    dep_graph = dep_analyzer.analyze_workspace()
+                    semantic_context += "\n" + build_dependency_context(dep_graph)
+
+                    yield self._log("info", "Added semantic graph and dependency analysis to context.")
+                else:
+                    # Subsequent requests - skip (already in conversation history)
+                    semantic_context = "=== SEMANTIC GRAPH (cached) ===\nFull semantic graph was provided in previous messages.\n"
+                    yield self._log("info", "Skipped semantic graph (using cached from conversation history)")
+            except Exception as e:
+                print(f"[AGENT] Semantic context generation failed (non-fatal): {e}")
+
+        # Enrich memory context with structured data
+        memory_context_enriched = state.memory_context
+        if state.memory_context_structured.get("has_memory"):
+            # ✅ OPTIMIZE: Limit memory context size
+            similar_solutions = state.memory_context_structured.get("similar_solutions", [])
+            if similar_solutions:
+                memory_context_enriched += "\n\n=== RECOMMENDED APPROACH (Based on Similar Past Solutions) ===\n"
+                # Limit to top 2 solutions (was unlimited)
+                for idx, sol in enumerate(similar_solutions[:2], 1):
+                    memory_context_enriched += f"\n[Approach {idx}] (Similarity: {sol['similarity']:.2f})\n"
+                    memory_context_enriched += f"Tools to use: {', '.join(sol['tools_used'][:5])}\n"  # Limit tools
+                    memory_context_enriched += f"Key steps:\n"
+                    # Limit to 3 actions (was unlimited)
+                    for action in sol['actions'][:3]:
+                        memory_context_enriched += f"  - {action[:100]}\n"  # Truncate long actions
+
+            # Add RLD genes section
+            rld_genes = state.memory_context_structured.get("rld_genes", [])
+            if rld_genes:
+                memory_context_enriched += "\n\n=== REASONING PATTERNS (RLD Genes) ===\n"
+                # Limit to top 3 genes (was unlimited)
+                for gene in rld_genes[:3]:
+                    success_rate = gene.get('success_rate', 0)
+                    memory_context_enriched += f"- Pattern: {gene['pattern']} (success rate: {success_rate:.1%})\n"
+                    memory_context_enriched += f"  Tools: {', '.join(gene['tools'][:5])}\n"  # Limit tools
+
+        # Combine all context
+        full_context = workspace_summary_enriched
+        if semantic_context:
+            full_context += f"\n\n{semantic_context}"
+        if memory_context_enriched:
+            full_context += f"\n\n{memory_context_enriched}"
+
+        # ✅ ADD CONVERSATION HISTORY TO CONTEXT
+        conversation_context = self._format_history()
+        if conversation_context:
+            full_context = f"{conversation_context}\n\n{full_context}"
+            yield self._log("info", f"Added conversation history ({len(self.conversation_history)} messages) to context.")
+
+        # ✅ LOG CONTEXT SIZE
+        context_size = len(full_context)
+        context_size_kb = context_size / 1024
+        yield self._log("info", f"Total context size: {context_size_kb:.1f} KB ({context_size:,} chars)")
+
+        # --- Generate patch with enriched context ---
         yield self._tool_call("llm_generate", status="running", target=self.gemini.model_id if hasattr(self.gemini, 'model_id') else "LLM", detail=f"iteration {iteration}")
         await asyncio.sleep(0.4)
 
@@ -1222,22 +1379,22 @@ class SharrowkinAgent:
         try:
             generated = await self.gemini.generate_patch(
                 task=state.task,
-                workspace_summary=workspace_summary_enriched,
-                memory_context=state.memory_context,
+                workspace_summary=full_context,
+                memory_context=memory_context_enriched,
                 previous_error=previous_err_combined,
                 action_history=state.actions,
                 file_contents=file_contents,
             )
         except (httpx.TimeoutException, httpx.ReadTimeout, httpx.WriteTimeout, Exception) as exc:
             yield self._log("warning", f"Генерация патча завершилась с ошибкой или таймаутом: {exc}. Снижаю размер контекста и пробую снова...")
-            
+
             # Reduce context dynamically
-            ws_summary_reduced = workspace_summary_enriched[:4000] + "\n... [truncated due to timeout] ..."
-            mem_context_reduced = state.memory_context[:2000] + "\n... [truncated due to timeout] ..."
+            ws_summary_reduced = full_context[:6000] + "\n... [truncated due to timeout] ..."
+            mem_context_reduced = memory_context_enriched[:4000] + "\n... [truncated due to timeout] ..."
             file_contents_reduced = {}
             for path, content in file_contents.items():
                 file_contents_reduced[path] = content[:4000] + "\n... [truncated due to timeout] ..."
-            
+
             # Retry once with reduced context
             generated = await self.gemini.generate_patch(
                 task=state.task,
@@ -1337,6 +1494,12 @@ class SharrowkinAgent:
             return
 
         # Multi-file Reasoning: Apply file edits
+        # ✅ SAFETY CHECK: Ensure generated.files is not empty
+        if not generated.files:
+            yield self._log("warning", "No files to patch, skipping file operations")
+            yield self._phase("Reason", "done")
+            return
+
         yield self._log("info", f"Patching {len(generated.files)} file(s)...")
         for path in generated.files:
             yield self._tool_call("write_file", status="running", target=path)
@@ -1352,6 +1515,11 @@ class SharrowkinAgent:
         # Emulate waiting for user approval (in a real system, the websocket would pause here)
         yield self._log("info", "Diff preview approved autonomously (Diff Preview mode active).")
 
+        # Convert generated.files dict to list of ProposedFileChange
+        changes = [
+            ProposedFileChange(path=path, content=content)
+            for path, content in generated.files.items()
+        ]
         patch = await asyncio.to_thread(apply_changes, state.workspace, changes)
         state.current_changed_files = patch.changed_files
         state.final_diff = patch.diff or await asyncio.to_thread(git_diff, state.workspace)
@@ -1378,6 +1546,20 @@ class SharrowkinAgent:
             "energy_ledger": self._get_energy_ledger(state, memory, "Reason", iteration),
             "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
         }
+
+        # ✅ SAVE AGENT RESPONSE TO CONVERSATION HISTORY
+        agent_response = generated.rationale or "Code changes applied"
+        if generated.files:
+            agent_response += f"\n\nModified files: {', '.join(generated.files.keys())}"
+        if generated.commands:
+            agent_response += f"\n\nExecuted commands: {', '.join(generated.commands)}"
+
+        self.conversation_history.append({"role": "assistant", "content": agent_response})
+
+        # Keep history manageable (last 20 messages)
+        if len(self.conversation_history) > 20:
+            self.conversation_history = self.conversation_history[-20:]
+
         yield self._phase("Reason", "done")
 
     # --- Phase: Stabilize (test) --------------------------------------------
@@ -1395,137 +1577,115 @@ class SharrowkinAgent:
             "energy_ledger": self._get_energy_ledger(state, memory, "Stabilize", iteration),
             "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
         }
-        yield self._log("info", f"Running pytest, iteration {iteration}.")
-        yield self._tool_call("run_tests", status="running", target="pytest")
-        test_result = await asyncio.to_thread(run_pytest, state.workspace)
-        state.actions.append(f"pytest exited with {test_result.exit_code}")
-        state.tools_used.append("pytest")
 
-        if test_result.success:
-            state.last_error = ""
-            yield self._tool_call("run_tests", status="done", target="pytest", detail="all tests passed")
-            yield self._tool_activity("Tested project", message="pytest passed", target="pytest")
-            yield self._log("success", test_result.output or "pytest passed.")
-            yield {
-                "type": "cognitive_update",
-                "mode": "Full NARE-Field",
-                "energy_ledger": self._get_energy_ledger(state, memory, "Stabilize", iteration),
-                "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
-            }
-            await self.plugins.run_post_stabilize(state, True, iteration)
+        if not state.changes_made:
+            yield self._log("info", "No file changes to test.")
             yield self._phase("Stabilize", "done")
             return
 
-        # Test failed - analyze with debugger
-        state.last_error = test_result.output
-        yield self._tool_call("run_tests", status="error", target="pytest", detail=f"exit {test_result.exit_code}")
-        yield self._log("error", test_result.output)
+        yield self._log("info", "Running tests to validate changes.")
+        yield self._tool_call("pytest", status="running", target=str(state.workspace))
+        await asyncio.sleep(0.5)
 
-        # Intelligent error analysis
-        try:
-            from debugging import DebuggerSession
-            debugger = DebuggerSession(state.workspace)
+        test_result = await asyncio.to_thread(run_pytest, state.workspace)
+        state.actions.append(f"Ran pytest: exit_code={test_result.exit_code}, success={test_result.success}")
+        state.tools_used.append("pytest")
 
-            # Parse error from pytest output
-            error_info = self._parse_pytest_error(test_result.output)
+        await asyncio.sleep(0.3)
+        yield self._tool_call("pytest", status="done", target=str(state.workspace), detail=f"exit_code={test_result.exit_code}")
 
-            if error_info:
-                file_name = error_info.get("file", "")
-                line_no = error_info.get("line", 0)
-                
-                # Perform Recursive AST Error Localization!
-                ast_diagnostics = localize_ast_error(state.workspace, file_name, line_no)
-                
-                state.actions.append(f"AST Error Localized in file '{file_name}' at line {line_no}")
-                if ast_diagnostics:
-                    state.actions.append(f"Failing Class: {ast_diagnostics['enclosing_class']}, Func: {ast_diagnostics['enclosing_func']}")
-                    error_info["root_cause"] = f"AST Localized in function '{ast_diagnostics['enclosing_func']}' of class '{ast_diagnostics['enclosing_class']}':\n{ast_diagnostics['snippet']}"
-                    error_info["suggested_fix"] = f"Review variable scope and logical constraints in:\n{ast_diagnostics['func_source'][:150]}..."
-                
-                yield self._log("info", "Analyzing error with debugger...")
+        # --- SELF-CORRECTION: If tests failed, analyze and retry ---
+        if not test_result.success:
+            yield self._log("warning", "Tests failed. Analyzing errors...")
 
-                # Send debug analysis to frontend
+            # Use FailureAnalyzer to understand the error
+            failure_context = FailureContext(
+                iteration=iteration,
+                changed_files=state.current_changed_files,
+                error_output=test_result.output,
+                test_failures=1,  # We don't have exact count, use 1
+                workspace_summary=state.workspace_summary[:2000]
+            )
+
+            analysis = await asyncio.to_thread(self.failure_analyzer.analyze, failure_context)
+
+            # Build error context for retry
+            error_summary = f"""
+=== TEST FAILURES DETECTED ===
+Exit code: {test_result.exit_code}
+Root cause: {analysis.root_cause}
+
+Suggested fix: {analysis.suggested_fix}
+
+Error output:
+{test_result.output[-2000:]}
+
+CRITICAL: The previous code changes caused test failures. You MUST fix these errors.
+Do NOT repeat the same approach. Analyze why the tests failed and generate a corrected solution.
+"""
+
+            state.last_error = error_summary
+            yield self._log("error", f"Root cause: {analysis.root_cause}")
+            yield self._log("info", f"Suggested fix: {analysis.suggested_fix}")
+
+            # Record failure for learning
+            self.failure_history.append(FailureRecord(
+                iteration=iteration,
+                changed_files=state.current_changed_files,
+                error=test_result.output,
+                patch_diff=state.final_diff
+            ))
+
+            # Update MemoryField with failure
+            if memory.memory_field:
+                memory.memory_field.update_symbolic("Reason", "Stabilize", success=False)
+
+            # Check if we should retry (max 3 attempts)
+            max_retries = 3
+            if iteration < max_retries:
+                yield self._log("warning", f"Attempt {iteration}/{max_retries} failed. Retrying with error context...")
                 yield {
-                    "type": "debug_analysis",
-                    "error_type": error_info.get("type", "Unknown"),
-                    "error_message": error_info.get("message", ""),
-                    "file_path": error_info.get("file", ""),
-                    "line_number": error_info.get("line", 0),
-                    "root_cause": error_info.get("root_cause", ""),
-                    "suggested_fix": error_info.get("suggested_fix", "")
+                    "type": "cognitive_update",
+                    "mode": "Self-Correction",
+                    "energy_ledger": self._get_energy_ledger(state, memory, "Stabilize", iteration),
+                    "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else [],
+                    "retry": True,
+                    "iteration": iteration,
+                    "max_retries": max_retries
                 }
 
-                yield self._log("info", f"Root cause: {error_info.get('root_cause', 'Unknown')}")
-                yield self._log("info", f"Suggested fix: {error_info.get('suggested_fix', 'See error details')}")
-                
-                # Update symbolic transition weights for fail (Self-Healing)
-                if memory.memory_field:
-                    memory.memory_field.update_symbolic("Stabilize", "Reason (Self-Healing)", success=False)
+                # Return to Phase 3 (Reason) with error context
+                # This will be handled by the main loop
+                yield self._phase("Stabilize", "retry")
+                return
+            else:
+                yield self._log("error", f"Max retries ({max_retries}) reached. Tests still failing.")
+                yield {
+                    "type": "cognitive_update",
+                    "mode": "Failed",
+                    "energy_ledger": self._get_energy_ledger(state, memory, "Stabilize", iteration),
+                    "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else [],
+                    "max_retries_reached": True
+                }
+                yield self._phase("Stabilize", "failed")
+                return
 
-        except Exception as e:
-            print(f"[AGENT] Debug analysis failed: {e}")
-
+        # Tests passed - success!
+        yield self._log("success", f"All tests passed ({test_result.passed} passed).")
         yield {
             "type": "cognitive_update",
             "mode": "Full NARE-Field",
             "energy_ledger": self._get_energy_ledger(state, memory, "Stabilize", iteration),
             "attractors": memory.memory_field.get_top_associations(limit=8) if memory.memory_field else []
         }
-        await self.plugins.run_post_stabilize(state, False, iteration)
-        yield self._phase("Stabilize", "error")
 
-    def _parse_pytest_error(self, output: str) -> dict[str, str] | None:
-        """Parse pytest output to extract error information."""
-        import re
+        # Update MemoryField with success
+        if memory.memory_field:
+            memory.memory_field.update_symbolic("Reason", "Stabilize", success=True)
 
-        # Look for common error patterns
-        # Example: "AttributeError: 'NoneType' object has no attribute 'method'"
-        error_match = re.search(r'(\w+Error): (.+)', output)
-        if not error_match:
-            return None
+        await self.plugins.run_post_stabilize(state, iteration)
+        yield self._phase("Stabilize", "done")
 
-        error_type = error_match.group(1)
-        error_message = error_match.group(2)
-
-        # Extract file and line number
-        # Example: "test_file.py:42: AttributeError"
-        location_match = re.search(r'([^/\s]+\.py):(\d+):', output)
-        file_path = location_match.group(1) if location_match else ""
-        line_number = int(location_match.group(2)) if location_match else 0
-
-        # Generate root cause and fix based on error type
-        root_cause = ""
-        suggested_fix = ""
-
-        if error_type == "AttributeError" and "NoneType" in error_message:
-            root_cause = "Attempting to access attribute on None object"
-            suggested_fix = "Add null check: if obj is not None: obj.attribute"
-        elif error_type == "KeyError":
-            root_cause = f"Dictionary key not found: {error_message}"
-            suggested_fix = "Use safe access: dict.get(key, default_value)"
-        elif error_type == "IndexError":
-            root_cause = "List index out of range"
-            suggested_fix = "Add bounds check: if index < len(list): list[index]"
-        elif error_type == "TypeError":
-            root_cause = "Type mismatch in operation"
-            suggested_fix = "Check operand types and convert if necessary"
-        elif error_type == "AssertionError":
-            root_cause = "Test assertion failed"
-            suggested_fix = "Review test expectations and actual output"
-        else:
-            root_cause = f"Error of type {error_type}"
-            suggested_fix = "Review error message and stack trace"
-
-        return {
-            "type": error_type,
-            "message": error_message,
-            "file": file_path,
-            "line": line_number,
-            "root_cause": root_cause,
-            "suggested_fix": suggested_fix
-        }
-
-    # --- Phase: Commit (learn) ----------------------------------------------
     async def _commit(
         self,
         state: AgentRunState,

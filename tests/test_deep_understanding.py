@@ -3,8 +3,8 @@ import tempfile
 from pathlib import Path
 from analysis.patterns import PatternDetector
 from analysis.git import GitAnalyzer
-from analysis.documentation import DocLinker
-from analysis.semantic_graph import SemanticGraph, SemanticGraphBuilder, CodeNodeType
+# from analysis.documentation import DocLinker  # TODO: Fix import
+from analysis.code.semantic_graph import SemanticGraph, SemanticGraphBuilder, CodeNodeType
 
 
 def test_pattern_detector():

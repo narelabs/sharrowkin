@@ -1,9 +1,6 @@
 from pathlib import Path
 
-from dsm import DynamicSegmentedMemory, TiidoDSMRuntime
-from dsm.mcp_server import DsmMcpServer
-from dsm.memory import sparse_attention_cost
-from dsm.visualize import graph_data, graph_html
+from memory.dsm.core.memory import DynamicSegmentedMemory
 
 
 def test_write_route_active_context(tmp_path: Path) -> None:

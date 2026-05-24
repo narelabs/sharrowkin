@@ -1,7 +1,7 @@
 """Core agent logic.
 
 Restructured for clarity:
-- agent.py - Main SharrowkinAgent with 5-phase cycle
+- agent.py - Main SharrowkinAgent with 5-phase cycle (LEGACY - use agent/core.py instead)
 - types.py - Type definitions
 - tools.py - Built-in tools
 - llm/ - LLM integrations
@@ -10,7 +10,14 @@ Restructured for clarity:
 - tool_system/ - Tool runner
 """
 
-from .agent import PHASES, SharrowkinAgent
+# Import from legacy location for backward compatibility
+# TODO: Remove after migrating all imports to agent.core
+try:
+    from .agent import PHASES, SharrowkinAgent as LegacySharrowkinAgent
+except ImportError:
+    PHASES = ["Observe", "Recall", "Reason", "Stabilize", "Commit"]
+    LegacySharrowkinAgent = None
+
 from .llm import GeminiClient
 from .strategy import SharrowkinAgentConfig, SharrowkinConnection
 from .tools import (
@@ -33,7 +40,6 @@ __all__ = [
     "PHASES",
     "GeminiClient",
     "ProposedFileChange",
-    "SharrowkinAgent",
     "SharrowkinAgentConfig",
     "SharrowkinConnection",
     "Step",

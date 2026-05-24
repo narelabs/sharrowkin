@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from pathlib import Path
 import asyncio
 import json
+import uuid
+import time
 
 from agent import SharrowkinAgent, PHASES
 from memory import MemoryBridge
@@ -19,16 +21,60 @@ class AgentTaskRequest(BaseModel):
     session_id: str | None = None
 
 
-# Global agent state
-_active_agents: dict[str, SharrowkinAgent] = {}
+# Global agent state - PERSISTENT SESSIONS
+# Format: {session_id: (agent, memory, last_used_timestamp)}
+_agent_sessions: dict[str, tuple[SharrowkinAgent, MemoryBridge, float]] = {}
+_active_agents: dict[str, SharrowkinAgent] = {}  # Keep for backward compatibility
+
+# Session timeout: 1 hour
+SESSION_TIMEOUT = 3600
 
 
 @router.get("/status")
 async def get_agent_status():
     """Get agent status."""
+    # Clean up expired sessions
+    _cleanup_expired_sessions()
+
     return {
-        "active_sessions": len(_active_agents),
+        "active_sessions": len(_agent_sessions),
         "phases": PHASES
+    }
+
+
+def _cleanup_expired_sessions():
+    """Remove expired sessions."""
+    current_time = time.time()
+    expired = [
+        sid for sid, (_, _, last_used) in _agent_sessions.items()
+        if current_time - last_used > SESSION_TIMEOUT
+    ]
+    for sid in expired:
+        del _agent_sessions[sid]
+        print(f"[Session] Cleaned up expired session: {sid}")
+
+
+@router.post("/session/clear")
+async def clear_session(session_id: str):
+    """Clear agent session and memory."""
+    if session_id in _agent_sessions:
+        del _agent_sessions[session_id]
+        return {"success": True, "message": f"Session {session_id} cleared"}
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@router.get("/session/info")
+async def get_session_info(session_id: str):
+    """Get session information."""
+    if session_id not in _agent_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    agent, memory, last_used = _agent_sessions[session_id]
+    return {
+        "session_id": session_id,
+        "conversation_length": len(agent.conversation_history),
+        "last_used": last_used,
+        "age_seconds": time.time() - last_used
     }
 
 
@@ -58,7 +104,7 @@ async def agent_websocket(websocket: WebSocket):
 
         task = message.get("task")
         workspace_path = message.get("workspace")
-        session_id = message.get("session_id", f"session_{len(_active_agents)}")
+        session_id = message.get("session_id") or f"session_{uuid.uuid4().hex[:8]}"
 
         if not task or not workspace_path:
             await websocket.send_json({
@@ -68,7 +114,7 @@ async def agent_websocket(websocket: WebSocket):
             await websocket.close()
             return
 
-        # Initialize agent
+        # Initialize workspace
         workspace = Path(workspace_path)
         if not workspace.exists():
             await websocket.send_json({
@@ -78,9 +124,27 @@ async def agent_websocket(websocket: WebSocket):
             await websocket.close()
             return
 
-        # Create agent (no workspace parameter in __init__)
-        agent = SharrowkinAgent()
-        _active_agents[session_id] = agent
+        # ✅ FIX: Reuse existing agent session or create new one
+        if session_id in _agent_sessions:
+            agent, memory, _ = _agent_sessions[session_id]
+            print(f"[Session] Reusing agent for session {session_id}")
+            await websocket.send_json({
+                "type": "session_info",
+                "message": f"Continuing session {session_id}",
+                "conversation_length": len(agent.conversation_history)
+            })
+        else:
+            agent = SharrowkinAgent()
+            memory = MemoryBridge(workspace_path)
+            print(f"[Session] Created new agent for session {session_id}")
+            await websocket.send_json({
+                "type": "session_info",
+                "message": f"Started new session {session_id}"
+            })
+
+        # Update session timestamp
+        _agent_sessions[session_id] = (agent, memory, time.time())
+        _active_agents[session_id] = agent  # Backward compatibility
 
         # Send start event
         await websocket.send_json({
@@ -97,6 +161,11 @@ async def agent_websocket(websocket: WebSocket):
             except Exception as e:
                 print(f"[WebSocket] Error sending event: {e}")
                 break
+
+        # Update session timestamp after completion
+        if session_id in _agent_sessions:
+            agent, memory, _ = _agent_sessions[session_id]
+            _agent_sessions[session_id] = (agent, memory, time.time())
 
         # Send completion
         await websocket.send_json({
@@ -116,7 +185,8 @@ async def agent_websocket(websocket: WebSocket):
         except:
             pass
     finally:
-        # Cleanup
+        # ✅ FIX: DON'T delete agent session - keep for next request
+        # Only remove from active agents (backward compatibility)
         if session_id and session_id in _active_agents:
             del _active_agents[session_id]
 

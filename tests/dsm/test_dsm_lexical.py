@@ -1,10 +1,7 @@
 import sys
 from pathlib import Path
 
-# Подключаем src
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
-from dsm.core import DynamicSegmentedMemory
+from memory.dsm.core.memory import DynamicSegmentedMemory
 
 def run_lexical_stress_test():
     print("--- СТРЕСС-ТЕСТ ЛЕКСИЧЕСКОГО ПОИСКА DSM 3.0 ---")

@@ -2,34 +2,20 @@
 
 import { useState, useEffect, useCallback, Suspense } from "react"
 import { useRouter } from "next/navigation"
-import { ArrowLeft, Loader2, FolderTree, RotateCw, Search, X, FileCode, Save } from "lucide-react"
+import { ArrowLeft, Loader2, FolderTree, RotateCw, Search, X, FileCode, Save, Folder } from "lucide-react"
 import { FileTree, type FileNode } from "@/components/workflow/file-tree"
 import { CodeViewer } from "@/components/workflow/code-viewer"
 import { LeftSidebar } from "@/components/chat/left-sidebar"
-import { RepoSelector } from "@/components/workflow/repo-selector"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000"
 
-interface GitHubRepo {
-  id: number
-  name: string
-  full_name: string
-  private: boolean
-  description: string
-  html_url: string
-  default_branch: string
-  language: string
-  stargazers_count: number
-  updated_at: string
-}
-
 export default function WorkflowPage() {
   const router = useRouter()
-  const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null)
+  const [workspacePath, setWorkspacePath] = useState<string>("")
   const [treeData, setTreeData] = useState<FileNode | null>(null)
-  const [isLoadingTree, setIsLoadingTree] = useState(true)
+  const [isLoadingTree, setIsLoadingTree] = useState(false)
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null)
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null)
   const [fileContent, setFileContent] = useState<string | null>(null)
@@ -43,17 +29,29 @@ export default function WorkflowPage() {
   const [editContent, setEditContent] = useState("")
   const [isSaving, setIsSaving] = useState(false)
 
+  // Load workspace path from localStorage
+  useEffect(() => {
+    const savedPath = localStorage.getItem("workspace_path")
+    if (savedPath) {
+      setWorkspacePath(savedPath)
+    }
+  }, [])
+
   const handleSearch = useCallback(async (query: string) => {
-    if (!query.trim()) {
+    if (!query.trim() || !workspacePath) {
       setSearchResults([])
       return
     }
     setIsSearching(true)
     try {
-      const res = await fetch(`${BACKEND_URL}/api/search`, {
+      const res = await fetch(`${BACKEND_URL}/api/workspace/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, scope: "code", max_results: 30 }),
+        body: JSON.stringify({
+          workspace: workspacePath,
+          query,
+          max_results: 30
+        }),
       })
       if (res.ok) {
         const data = await res.json()
@@ -64,7 +62,7 @@ export default function WorkflowPage() {
     } finally {
       setIsSearching(false)
     }
-  }, [])
+  }, [workspacePath])
 
   const handleSearchSelect = (result: any) => {
     handleSelectFile(result.file, result.file.split("/").pop() || result.file)
@@ -79,13 +77,17 @@ export default function WorkflowPage() {
   }
 
   const handleSaveFile = async () => {
-    if (!selectedFilePath) return
+    if (!selectedFilePath || !workspacePath) return
     setIsSaving(true)
     try {
-      const res = await fetch(`${BACKEND_URL}/api/files`, {
+      const res = await fetch(`${BACKEND_URL}/api/workspace/file`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: selectedFilePath, content: editContent }),
+        body: JSON.stringify({
+          workspace: workspacePath,
+          path: selectedFilePath,
+          content: editContent
+        }),
       })
       if (res.ok) {
         setFileContent(editContent)
@@ -107,94 +109,27 @@ export default function WorkflowPage() {
   }
 
   const fetchTree = async () => {
-    if (!selectedRepo) {
-      setTreeData(null)
+    if (!workspacePath) {
+      toast.error("No workspace selected")
       return
     }
 
     setIsLoadingTree(true)
     try {
-      const token = localStorage.getItem("github_token")
-      if (!token) {
-        toast.error("GitHub token not found")
-        return
-      }
-
-      const [owner, repo] = selectedRepo.full_name.split("/")
       const res = await fetch(
-        `${BACKEND_URL}/api/github/repos/${owner}/${repo}/tree?recursive=true`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        `${BACKEND_URL}/api/workspace/tree?path=${encodeURIComponent(workspacePath)}`
       )
 
       if (!res.ok) {
-        throw new Error("Failed to fetch repository tree")
+        throw new Error("Failed to fetch workspace tree")
       }
 
       const data = await res.json()
-
-      // Extract tree array from response
-      // API returns: {"status":"success","tree":{"sha":"...","tree":[...]}}
-      const treeItems = data.tree?.tree || data.tree || []
-
-      // Convert GitHub tree to FileNode structure
-      const convertToFileNode = (treeItems: any[]): FileNode => {
-        const root: FileNode = {
-          name: repo,
-          path: "",
-          type: "directory",
-          children: [],
-        }
-
-        // Ensure treeItems is an array
-        if (!Array.isArray(treeItems)) {
-          console.error("Tree items is not an array:", treeItems)
-          return root
-        }
-
-        // Build tree structure
-        const pathMap = new Map<string, FileNode>()
-        pathMap.set("", root)
-
-        // Sort by path depth to ensure parents are created first
-        const sortedTree = treeItems.sort((a, b) => {
-          const depthA = a.path.split("/").length
-          const depthB = b.path.split("/").length
-          return depthA - depthB
-        })
-
-        for (const item of sortedTree) {
-          const parts = item.path.split("/")
-          const name = parts[parts.length - 1]
-          const parentPath = parts.slice(0, -1).join("/")
-
-          const node: FileNode = {
-            name,
-            path: item.path,
-            type: item.type === "tree" ? "directory" : "file",
-            children: item.type === "tree" ? [] : undefined,
-          }
-
-          pathMap.set(item.path, node)
-
-          const parent = pathMap.get(parentPath)
-          if (parent && parent.children) {
-            parent.children.push(node)
-          }
-        }
-
-        return root
-      }
-
-      const treeNode = convertToFileNode(treeItems)
-      setTreeData(treeNode)
-      toast.success("Repository tree loaded")
+      setTreeData(data.tree)
+      toast.success("Workspace tree loaded")
     } catch (err) {
       console.error("Failed to fetch tree:", err)
-      toast.error("Failed to load repository tree")
+      toast.error("Failed to load workspace tree")
       setTreeData(null)
     } finally {
       setIsLoadingTree(false)
@@ -202,13 +137,13 @@ export default function WorkflowPage() {
   }
 
   useEffect(() => {
-    if (selectedRepo) {
+    if (workspacePath) {
       fetchTree()
     }
-  }, [selectedRepo])
+  }, [workspacePath])
 
   const handleSelectFile = async (path: string, name: string) => {
-    if (!selectedRepo) return
+    if (!workspacePath) return
 
     setSelectedFilePath(path)
     setSelectedFileName(name)
@@ -216,33 +151,13 @@ export default function WorkflowPage() {
     setFileContent(null)
 
     try {
-      const token = localStorage.getItem("github_token")
-      if (!token) {
-        toast.error("GitHub token not found")
-        return
-      }
-
-      const [owner, repo] = selectedRepo.full_name.split("/")
       const res = await fetch(
-        `${BACKEND_URL}/api/github/repos/${owner}/${repo}/file?path=${encodeURIComponent(path)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        `${BACKEND_URL}/api/workspace/file?workspace=${encodeURIComponent(workspacePath)}&path=${encodeURIComponent(path)}`
       )
 
       if (res.ok) {
         const data = await res.json()
-        // Extract content from nested structure
-        const contentData = data.content
-        if (contentData && contentData.content && contentData.encoding === "base64") {
-          // Decode base64
-          const decoded = atob(contentData.content.replace(/\n/g, ''))
-          setFileContent(decoded)
-        } else {
-          setFileContent(contentData?.content || "Failed to load file.")
-        }
+        setFileContent(data.content || "")
       } else {
         setFileContent("Failed to load file.")
         toast.error("Failed to load file")
@@ -253,6 +168,12 @@ export default function WorkflowPage() {
     } finally {
       setIsLoadingFile(false)
     }
+  }
+
+  const handleWorkspaceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newPath = e.target.value
+    setWorkspacePath(newPath)
+    localStorage.setItem("workspace_path", newPath)
   }
 
   return (
@@ -270,7 +191,7 @@ export default function WorkflowPage() {
               <span>Project Explorer</span>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowSearch(!showSearch)}
@@ -312,7 +233,7 @@ export default function WorkflowPage() {
                 </button>
               </>
             )}
-            <button 
+            <button
               onClick={fetchTree}
               className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-stone-500 hover:text-stone-700 bg-stone-50 hover:bg-stone-100 border border-stone-200/60 rounded-md transition-colors"
               disabled={isLoadingTree}
@@ -325,21 +246,24 @@ export default function WorkflowPage() {
 
         {/* Main Content */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Sidebar - Repo Selector + File Tree + Search */}
+          {/* Sidebar - Workspace Selector + File Tree + Search */}
           <div className="w-[320px] bg-[#fafafa] flex flex-col shrink-0">
-            {/* Repository Selector */}
+            {/* Workspace Path Input */}
             <div className="px-3 py-3 border-b border-stone-200/60">
-              <RepoSelector
-                selectedRepo={selectedRepo}
-                onSelectRepo={(repo) => {
-                  setSelectedRepo(repo)
-                  setTreeData(null)
-                  setSelectedFilePath(null)
-                  setSelectedFileName(null)
-                  setFileContent(null)
-                  toast.success(`Selected: ${repo.full_name}`)
-                }}
+              <div className="flex items-center gap-2 mb-1.5">
+                <Folder size={14} className="text-stone-500" />
+                <span className="text-[11px] font-medium text-stone-600 uppercase tracking-wide">Workspace</span>
+              </div>
+              <input
+                type="text"
+                value={workspacePath}
+                onChange={handleWorkspaceChange}
+                placeholder="Enter workspace path..."
+                className="w-full px-3 py-2 text-[12px] bg-white border border-stone-200 rounded-lg outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 transition-all"
               />
+              <p className="text-[10px] text-stone-500 mt-1.5">
+                Example: C:\Users\user\Documents\project
+              </p>
             </div>
 
             {showSearch ? (
@@ -396,9 +320,9 @@ export default function WorkflowPage() {
                   Workspace Files
                 </div>
                 <div className="flex-1 overflow-y-auto px-2 pb-4">
-                  {!selectedRepo ? (
+                  {!workspacePath ? (
                     <div className="p-4 text-center text-[12px] text-stone-500">
-                      Select a repository above to browse files
+                      Enter workspace path above to browse files
                     </div>
                   ) : isLoadingTree ? (
                     <div className="flex flex-col items-center justify-center h-32 text-stone-400 gap-2">
@@ -413,7 +337,7 @@ export default function WorkflowPage() {
                     />
                   ) : (
                     <div className="p-4 text-center text-[12px] text-stone-500">
-                      Repository file browsing coming soon
+                      Failed to load workspace tree
                     </div>
                   )}
                 </div>
@@ -436,10 +360,10 @@ export default function WorkflowPage() {
                 />
               </div>
             ) : (
-              <CodeViewer 
-                filename={selectedFilePath} 
-                content={fileContent} 
-                isLoading={isLoadingFile} 
+              <CodeViewer
+                filename={selectedFilePath}
+                content={fileContent}
+                isLoading={isLoadingFile}
               />
             )}
           </div>

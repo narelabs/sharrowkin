@@ -44,6 +44,7 @@ from config.settings import AgentConfig, load_config
 from agent.workspace_cache import WorkspaceCache, CachedWorkspace
 from agent.failure_analyzer import FailureAnalyzer, FailureContext
 from core.plugins.base import PluginManager
+from core.cached_workspace_manager import CachedWorkspaceManager
 
 PHASES = ["Observe", "Recall", "Reason", "Stabilize", "Commit"]
 
@@ -220,10 +221,25 @@ class SharrowkinAgent:
         self.persona_manager = get_persona_manager()
         self.selected_repo: str = ""  # Persistent selected repository across requests
         self.workspace_cache = WorkspaceCache(ttl_seconds=3600, max_entries=10)  # Cache workspace scans
+        self.workspace_manager: CachedWorkspaceManager | None = None  # ✅ NEW: File watcher integration
         self.failure_history: list[FailureRecord] = []
         self.failure_analyzer = FailureAnalyzer()  # NEW: Analyze failures for learning
         self._tracer = get_tracer()
         self.plugins = PluginManager(self)
+
+    def start_workspace_watching(self, workspace: Path):
+        """✅ NEW: Start file watcher for incremental cache updates."""
+        if self.workspace_manager is None:
+            self.workspace_manager = CachedWorkspaceManager(workspace, ttl_seconds=3600)
+            self.workspace_manager.start_watching()
+            print(f"[AGENT] Started workspace file watcher for {workspace}")
+
+    def stop_workspace_watching(self):
+        """✅ NEW: Stop file watcher."""
+        if self.workspace_manager is not None:
+            self.workspace_manager.stop_watching()
+            self.workspace_manager = None
+            print(f"[AGENT] Stopped workspace file watcher")
 
     def _get_energy_ledger(self, state: AgentRunState, memory: MemoryBridge, phase: str, iteration: int = 1) -> dict:
         """Compute the algorithmic energy footprint of cognitive execution."""
@@ -411,6 +427,10 @@ class SharrowkinAgent:
 
             print(f"[AGENT] run() called: task={task!r}, workspace_path={workspace_path!r}, plan_mode={plan_mode!r}")
             workspace = resolve_workspace(workspace_path)
+
+            # ✅ NEW: Start file watcher for incremental updates
+            self.start_workspace_watching(workspace)
+
             state = AgentRunState(
                 task=task,
                 workspace=workspace,

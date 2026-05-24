@@ -62,6 +62,7 @@ from .models import (
     clamp01,
     now_ts,
 )
+from .spatial_index import GeneSpatialIndex
 
 
 class LatentEncoder(Protocol):
@@ -231,6 +232,7 @@ class RecursiveLatentDNA:
         self.gene_segment_ids: dict[str, str] = {}
         self.trajectories: dict[str, ReasoningTrajectory] = {}
         self.activation_traces: list[ActivationTrace] = []
+        self.spatial_index = GeneSpatialIndex(leaf_size=40)  # ✅ NEW: Spatial index for O(N log N) merging
         if self.storage.exists():
             self.load()
 
@@ -633,6 +635,50 @@ class RecursiveLatentDNA:
         report.pruned.extend(remove_ids)
 
     def _merge_compatible(self, similarity: float, report: ConsolidationReport) -> None:
+        # ✅ OPTIMIZED: Use spatial index for O(N log N) instead of O(N²)
+        if self.spatial_index.is_available() and len(self.genes) > 100:
+            self._merge_compatible_spatial(similarity, report)
+        else:
+            self._merge_compatible_bruteforce(similarity, report)
+
+    def _merge_compatible_spatial(self, similarity: float, report: ConsolidationReport) -> None:
+        """O(N log N) gene merging using spatial index."""
+        # Rebuild spatial index with current genes
+        self.spatial_index.build(self.genes)
+
+        visited: set[str] = set()
+        for left in list(self.genes.values()):
+            if left.id in visited or left.id not in self.genes:
+                continue
+
+            # Find similar genes using spatial index
+            similar = self.spatial_index.find_similar(left, similarity, max_results=50)
+            group = [left]
+
+            for gene_id, sim in similar:
+                right = self.genes.get(gene_id)
+                if right is None or right.id in visited:
+                    continue
+                if compatible_genes(left, right, similarity):
+                    group.append(right)
+
+            if len(group) < 2:
+                continue
+
+            merged = merge_genes(group, self.embedding_model)
+            for gene in group:
+                visited.add(gene.id)
+                self.genes.pop(gene.id, None)
+                segment_id = self.gene_segment_ids.pop(gene.id, "")
+                if segment_id:
+                    self._remove_dsm_segment(segment_id)
+            self.genes[merged.id] = merged
+            self._index_gene(merged)
+            report.merged.append(merged.id)
+            report.merge_lineage[merged.id] = [g.id for g in group]
+
+    def _merge_compatible_bruteforce(self, similarity: float, report: ConsolidationReport) -> None:
+        """O(N²) gene merging fallback when spatial index unavailable."""
         visited: set[str] = set()
         for left in list(self.genes.values()):
             if left.id in visited or left.id not in self.genes:

@@ -218,6 +218,79 @@ class SemanticGraph:
             ],
         }
 
+    def to_prompt_context(self, max_modules: int = 10, max_classes_per_module: int = 5) -> str:
+        """Generate semantic graph context for LLM prompts.
+
+        Returns a structured summary of the codebase architecture including:
+        - Module structure with key classes and functions
+        - Complexity hotspots
+        - Detected design patterns
+        - Git hotspots (frequently modified files)
+        """
+        lines = ["## Semantic Code Graph\n"]
+
+        # Get modules
+        modules = self.get_modules()[:max_modules]
+
+        for module in modules:
+            lines.append(f"### Module: {module.name}")
+            if module.file_path:
+                lines.append(f"  File: {module.file_path}")
+
+            # Get classes in this module
+            classes = self.get_classes(module.id)[:max_classes_per_module]
+            if classes:
+                lines.append("  Classes:")
+                for cls in classes:
+                    patterns = cls.metadata.get("detected_patterns", [])
+                    pattern_str = f" [{', '.join(patterns)}]" if patterns else ""
+                    lines.append(f"    - {cls.name}{pattern_str}")
+
+                    # Get methods
+                    methods = self.get_functions(cls.id)[:5]
+                    if methods:
+                        for method in methods:
+                            complexity_str = f" [complexity: {method.complexity}]" if method.complexity > 10 else ""
+                            lines.append(f"      - {method.name}(){complexity_str}")
+
+            # Get top-level functions
+            functions = self.get_functions(module.id)[:5]
+            if functions:
+                lines.append("  Functions:")
+                for func in functions:
+                    complexity_str = f" [complexity: {func.complexity}]" if func.complexity > 10 else ""
+                    lines.append(f"    - {func.name}(){complexity_str}")
+
+            lines.append("")
+
+        # Add complexity metrics
+        metrics = self.calculate_complexity_metrics()
+        lines.append("## Complexity Metrics")
+        lines.append(f"- Total nodes: {metrics['total_nodes']}")
+        lines.append(f"- Total functions: {metrics['total_functions']}")
+        lines.append(f"- Average complexity: {metrics['average_complexity']:.2f}")
+
+        if metrics['most_complex']:
+            lines.append("\n### Complexity Hotspots (Top 5):")
+            for func in metrics['most_complex'][:5]:
+                lines.append(f"  - {func['id']} (complexity: {func['complexity']}, line: {func['line']})")
+
+        # Add design patterns
+        patterns = self.get_detected_patterns()
+        detected = {k: v for k, v in patterns.items() if v}
+        if detected:
+            lines.append("\n## Detected Design Patterns")
+            for pattern_name, class_ids in detected.items():
+                lines.append(f"- {pattern_name}: {', '.join(class_ids[:3])}")
+
+        # Add git hotspots
+        if self.git_hotspots:
+            lines.append("\n## Git Hotspots (Frequently Modified)")
+            for file_path, count in self.git_hotspots[:5]:
+                lines.append(f"  - {file_path} ({count} changes)")
+
+        return "\n".join(lines)
+
     def get_context_for_node(self, node_id: str, workspace: Path) -> str:
         """Get rich context for a node using ContextLinker."""
         try:

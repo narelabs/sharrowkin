@@ -76,6 +76,8 @@ class AgentRunState:
     current_changed_files: list[str] = field(default_factory=list)
     semantic_graph: Any = None  # SemanticGraph instance for Phase 3
     selected_repo: str = ""  # GitHub repository (owner/repo)
+    task_graph: Any = None  # TaskGraph for hierarchical planning
+    total_files: int = 0  # Total files in workspace
 
 
 def localize_ast_error(workspace: Path, file_name: str, line_number: int) -> dict[str, str] | None:
@@ -669,26 +671,36 @@ class SharrowkinAgent:
                                 # ✅ ADD CONVERSATION HISTORY
                                 conversation_context = self._format_history()
 
-                                rich_prompt = (
-                                    f"{conversation_context}\n\n" if conversation_context else ""
-                                    f"User request: {state.task}\n\n"
-                                    f"Workspace README.md:\n{readme_content}\n\n"
-                                    f"Workspace AST summary (clipped):\n{ws_summary_clipped}\n\n"
-                                    f"Associative Memory Context (from DSM/RLD):\n{state.memory_context}\n\n"
-                                    f"Autonomous operating policy:\n{AUTONOMOUS_AGENT_POLICY}\n\n"
-                                    "Please answer the user's request thoroughly and naturally. "
-                                    "Since the query is informational/read-only, write a comprehensive, high-quality response. "
-                                    "Do not include any file-change instructions or patch content in the response. "
-                                    "Write the response in the same language the user asked in (which is usually Russian)."
+                                # ✅ FIX: Build rich context with workspace summary and memory
+                                rich_prompt = f"User request: {state.task}\n\n"
+
+                                if conversation_context:
+                                    rich_prompt += f"{conversation_context}\n\n"
+
+                                if readme_content:
+                                    rich_prompt += f"## Workspace README.md:\n{readme_content}\n\n"
+
+                                if ws_summary_clipped:
+                                    rich_prompt += f"## Workspace Structure (AST Analysis):\n{ws_summary_clipped}\n\n"
+
+                                if state.memory_context:
+                                    rich_prompt += f"## Memory Context (DSM/RLD/TraceMemory):\n{state.memory_context}\n\n"
+
+                                rich_prompt += (
+                                    "Please analyze the workspace and answer the user's request thoroughly. "
+                                    "Use the workspace structure, README, and memory context to provide a detailed, accurate response. "
+                                    "Structure your reply with markdown headers and bullet points. "
+                                    "Answer in the same language as the user query (usually Russian)."
                                 )
-                            
+
+                            # ✅ FIX: Use proper system instruction without GitHub-only policy
                             rich_response = await self.gemini.generate_text(
                                 rich_prompt,
                                 inject_persona(
-                                    f"{AUTONOMOUS_AGENT_POLICY}\n\n"
-                                    "Provide a professional, friendly, and very detailed response to the user's query about the project or code. "
-                                    "Structure your reply with clean markdown headers and bullet points. "
-                                    "Answer in the same language as the user query."
+                                    "You are Sharrowkin, an autonomous developer agent analyzing a local codebase. "
+                                    "You have access to the workspace structure, README, and memory context. "
+                                    "Provide professional, detailed analysis based on the provided context. "
+                                    "Use markdown formatting and answer in the user's language."
                                 )
                             )
                             state.last_rationale = rich_response
@@ -1177,13 +1189,14 @@ class SharrowkinAgent:
 
                 planner = HierarchicalPlanner()
                 context = PlanningContext(
-                    workspace_summary=state.workspace_summary,
-                    memory_context=state.memory_context,
+                    goal=state.task,
+                    workspace_path=state.workspace,
                     available_tools=["file_reader", "file_writer", "terminal", "pytest", "github_list_repos", "github_get_repo_info", "github_list_branches", "github_create_pr", "github_clone_repo"]
                 )
 
                 # Generate hierarchical plan
                 task_graph = await asyncio.to_thread(planner.plan, state.task, context)
+                state.task_graph = task_graph  # ✅ Store for execution
 
                 # Convert to frontend format
                 def task_to_dict(task):
@@ -1204,6 +1217,13 @@ class SharrowkinAgent:
                 }
 
                 yield self._log("success", f"Generated execution plan with {len(task_graph.tasks)} tasks")
+
+                # ✅ NEW: Check if task should be decomposed
+                # If task is complex (>3 subtasks), execute them sequentially
+                root_tasks = [t for t in task_graph.tasks.values() if not task_graph.get_dependencies(t.id)]
+                if len(root_tasks) > 1 or (root_tasks and len(root_tasks[0].subtasks) > 2):
+                    yield self._log("info", f"Task decomposed into {len(task_graph.tasks)} subtasks. Executing sequentially...")
+                    state.actions.append(f"Task decomposed into {len(task_graph.tasks)} subtasks")
             except Exception as e:
                 print(f"[AGENT] Planning failed (non-fatal): {e}")
 
@@ -1306,18 +1326,21 @@ class SharrowkinAgent:
         semantic_context = ""
         if state.semantic_graph:
             try:
-                from memory.semantic_context import build_semantic_context, build_dependency_context
-                from analysis.code.dependency import DependencyAnalyzer
-
                 # ✅ OPTIMIZE: Skip semantic graph if conversation history exists
                 if len(self.conversation_history) <= 2:
-                    # First request - include full semantic context
-                    semantic_context += build_semantic_context(state.semantic_graph, max_nodes=30)
+                    # First request - include full semantic context using new to_prompt_context()
+                    semantic_context = state.semantic_graph.to_prompt_context(max_modules=10, max_classes_per_module=5)
 
-                    # Build dependency analysis context
-                    dep_analyzer = DependencyAnalyzer(state.workspace)
-                    dep_graph = dep_analyzer.analyze_workspace()
-                    semantic_context += "\n" + build_dependency_context(dep_graph)
+                    # Add circular dependencies if detected
+                    if state.circular_dependencies > 0:
+                        from analysis.code.dependency import DependencyAnalyzer
+                        dep_analyzer = DependencyAnalyzer(state.workspace)
+                        dep_graph = dep_analyzer.get_graph()
+                        circular = dep_graph.get_circular_dependencies()
+                        if circular:
+                            semantic_context += "\n\n## ⚠️ Circular Dependencies Detected\n"
+                            for cycle in circular[:5]:
+                                semantic_context += f"  - {' → '.join(cycle)}\n"
 
                     yield self._log("info", "Added semantic graph and dependency analysis to context.")
                 else:

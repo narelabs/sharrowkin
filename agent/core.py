@@ -1153,8 +1153,8 @@ Use format:
             # Phase 3: Deep Code Understanding with Context Linker and Data Flow
             phase3_insights = ""
             try:
-                from analysis.context_linker import ContextLinker
-                from analysis.data_flow_analyzer import DataFlowAnalyzer
+                from analysis.code.context_linker import ContextLinker
+                from analysis.code.data_flow_analyzer import DataFlowAnalyzer
 
                 linker = ContextLinker(sem_graph, state.workspace)
                 flow_analyzer = DataFlowAnalyzer(sem_graph)

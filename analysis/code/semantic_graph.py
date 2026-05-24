@@ -559,7 +559,7 @@ class SemanticGraphBuilder:
 
         # Run Git analyzer
         try:
-            from .git import GitAnalyzer
+            from analysis.git import GitAnalyzer
             git_analyzer = GitAnalyzer(directory)
             self.graph.git_hotspots = git_analyzer.get_hotspots()
             self.graph.recent_commits = git_analyzer.get_recent_commits()

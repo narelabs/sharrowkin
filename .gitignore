@@ -79,6 +79,7 @@ marketplace/
 backend.log
 coverage.json
 .codegraph/
+.kiro/
 
 # Next.js / frontend build output
 ui/.next/

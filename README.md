@@ -2,22 +2,42 @@
 
 # Sharrowkin
 
-**An open-source autonomous coding agent with a 5-phase reasoning cycle and persistent memory.**
+### The coding agent that remembers your project across sessions.
+
+*Local-first. Bring your own model. Your code never leaves your machine.*
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 
+[Quickstart](#getting-started) · [How it works](#the-5-phase-reasoning-cycle) · [Memory](#memory-systems) · [Configuration](#configuration)
+
 </div>
 
 ---
 
+<div align="center">
+
+<img src="images/sharrowkin.png" alt="Sharrowkin" width="100%" />
+
+</div>
+
 ## Overview
 
-Sharrowkin is a local-first AI development agent that reads your codebase, reasons about changes, and applies them through a disciplined multi-phase loop. Unlike a stateless chat assistant, Sharrowkin remembers what it has seen and done across sessions through four complementary memory systems, so it gets more useful to *your* project over time.
+Most coding assistants forget everything the moment you close the tab. Sharrowkin doesn't.
 
-It runs entirely on your machine: a FastAPI backend drives the reasoning loop and talks to your chosen LLM, while a Next.js web UI gives you a live view of the agent's thinking, file edits, terminal output, and diffs.
+It's a **local-first** AI development agent that reads your codebase, reasons about changes, and applies them through a disciplined multi-phase loop. Across sessions it remembers what it has seen and done through **four complementary memory systems**, so it gets more useful to *your* project over time instead of starting cold every conversation.
+
+Everything runs on your machine: a FastAPI backend drives the reasoning loop and talks to your chosen LLM, while a Next.js web UI gives you a live, Devin-style view of the agent's thinking, file edits, terminal output, and diffs. The only thing that leaves your machine is the LLM call you explicitly configure.
+
+> **Why it's different:** persistent memory + local-first + bring-your-own-model, in one desktop app. Aider is CLI-only, Cursor is cloud and closed — Sharrowkin keeps your code on your machine *and* remembers it.
+
+## Demo
+
+> _Coming soon — a 30-second clip of the agent picking up a real task and resolving it end-to-end in the live workspace._
+>
+> Want to see it now? Follow the [Quickstart](#getting-started) and open `http://localhost:3000`.
 
 ## Key Features
 

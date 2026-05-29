@@ -1,63 +1,50 @@
+# Environment variables / secrets
 .env
+.env.local
+*.local
 
-# Python cache files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-
-# Distribution / packaging
 .Python
 build/
-develop-eggs/
 dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
 *.egg
-
-# PyInstaller
+*.egg-info/
+wheels/
 *.manifest
 *.spec
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing & coverage
 .coverage
 .coverage.*
-.cache
-nosetests.xml
 coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
 coverage.json
+htmlcov/
+.cache/
+.pytest_cache/
+.hypothesis/
+.tox/
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Type checking / linting
+.mypy_cache/
+.ruff_cache/
 
-# pyenv
-.python-version
-
-# Environments
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# IDEs
+# IDEs & editors
 .vscode/
 .idea/
+.kiro/
 *.swp
 *.swo
 *~
@@ -66,26 +53,18 @@ venv.bak/
 .DS_Store
 Thumbs.db
 
-# Project specific
-.sharrowkin/
-.rld_action_test.db
-test_*.txt
-test_fixed.txt
-market/
-marketplace/
-
-# Runtime artifacts
+# Logs
 *.log
-backend.log
-coverage.json
-.codegraph/
-.kiro/
 
-# Next.js / frontend build output
+# Node / Next.js frontend
+ui/node_modules/
 ui/.next/
 ui/out/
-ui/node_modules/
 
-# Tauri build output
+# Tauri desktop build
 ui/src-tauri/target/
 ui/src-tauri/gen/schemas/
+
+# Agent runtime data (memory store, indexes)
+.sharrowkin/
+.codegraph/

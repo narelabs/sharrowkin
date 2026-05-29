@@ -1,0 +1,133 @@
+/* ═══════════════════════════════════════════════════════════════════
+   Design Tokens — Sharrowkin Visual System
+   Single source of truth for color, typography, spacing, elevation, motion.
+   All colors use oklch for predictable perceptual contrast.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── Dark Theme (default) ─────────────────────────────────────── */
+:root[data-theme="dark"] {
+  /* ── Color ── */
+  --color-bg:             oklch(0.16 0.014 260);
+  --color-surface:        oklch(0.21 0.012 260);
+  --color-surface-2:      oklch(0.26 0.010 260);
+  --color-border:         oklch(0.32 0.008 260);
+  --color-border-strong:  oklch(0.42 0.010 260);
+  --color-text:           oklch(0.95 0.005 260);
+  --color-text-muted:     oklch(0.72 0.010 260);
+  --color-accent:         oklch(0.70 0.14 250);
+  --color-accent-strong:  oklch(0.78 0.16 250);
+  --color-success:        oklch(0.72 0.16 155);
+  --color-warning:        oklch(0.78 0.14 80);
+  --color-danger:         oklch(0.65 0.20 25);
+  --color-info:           oklch(0.70 0.12 230);
+
+  /* ── Typography ── */
+  --font-sans: var(--font-sans, ui-sans-serif, system-ui, -apple-system, sans-serif);
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Fira Code", monospace;
+
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.25rem;
+  --text-2xl:  1.5rem;
+
+  --leading-tight:   1.25;
+  --leading-relaxed: 1.625;
+
+  /* ── Spacing ── */
+  --space-1:  0.25rem;
+  --space-2:  0.5rem;
+  --space-3:  0.75rem;
+  --space-4:  1rem;
+  --space-5:  1.25rem;
+  --space-6:  1.5rem;
+  --space-7:  1.75rem;
+  --space-8:  2rem;
+  --space-9:  2.25rem;
+  --space-10: 2.5rem;
+  --space-11: 2.75rem;
+  --space-12: 3rem;
+
+  /* ── Radius ── */
+  --radius-sm:   0.25rem;
+  --radius-md:   0.5rem;
+  --radius-lg:   0.75rem;
+  --radius-xl:   1rem;
+  --radius-full: 9999px;
+
+  /* ── Elevation ── */
+  --shadow-card:    0 1px 3px oklch(0 0 0 / 0.3), 0 1px 2px oklch(0 0 0 / 0.2);
+  --shadow-overlay: 0 8px 24px oklch(0 0 0 / 0.4), 0 2px 8px oklch(0 0 0 / 0.3);
+  --shadow-focus:   0 0 0 2px oklch(0.70 0.14 250 / 0.5);
+
+  /* ── Motion ── */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 360ms;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* ─── Light Theme ──────────────────────────────────────────────── */
+:root[data-theme="light"] {
+  /* ── Color ── */
+  --color-bg:             oklch(0.985 0.002 260);
+  --color-surface:        oklch(1.00 0 0);
+  --color-surface-2:      oklch(0.97 0.003 260);
+  --color-border:         oklch(0.90 0.005 260);
+  --color-border-strong:  oklch(0.78 0.008 260);
+  --color-text:           oklch(0.20 0.010 260);
+  --color-text-muted:     oklch(0.45 0.012 260);
+  --color-accent:         oklch(0.50 0.16 250);
+  --color-accent-strong:  oklch(0.42 0.18 250);
+  --color-success:        oklch(0.52 0.16 155);
+  --color-warning:        oklch(0.60 0.16 80);
+  --color-danger:         oklch(0.52 0.20 25);
+  --color-info:           oklch(0.52 0.14 230);
+
+  /* ── Typography ── */
+  --font-sans: var(--font-sans, ui-sans-serif, system-ui, -apple-system, sans-serif);
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Fira Code", monospace;
+
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.25rem;
+  --text-2xl:  1.5rem;
+
+  --leading-tight:   1.25;
+  --leading-relaxed: 1.625;
+
+  /* ── Spacing ── */
+  --space-1:  0.25rem;
+  --space-2:  0.5rem;
+  --space-3:  0.75rem;
+  --space-4:  1rem;
+  --space-5:  1.25rem;
+  --space-6:  1.5rem;
+  --space-7:  1.75rem;
+  --space-8:  2rem;
+  --space-9:  2.25rem;
+  --space-10: 2.5rem;
+  --space-11: 2.75rem;
+  --space-12: 3rem;
+
+  /* ── Radius ── */
+  --radius-sm:   0.25rem;
+  --radius-md:   0.5rem;
+  --radius-lg:   0.75rem;
+  --radius-xl:   1rem;
+  --radius-full: 9999px;
+
+  /* ── Elevation ── */
+  --shadow-card:    0 1px 3px oklch(0 0 0 / 0.08), 0 1px 2px oklch(0 0 0 / 0.04);
+  --shadow-overlay: 0 8px 24px oklch(0 0 0 / 0.12), 0 2px 8px oklch(0 0 0 / 0.06);
+  --shadow-focus:   0 0 0 2px oklch(0.50 0.16 250 / 0.4);
+
+  /* ── Motion ── */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 360ms;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+}

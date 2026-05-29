@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { MessageBubble } from "./message-bubble"
 import type { Message } from "./chat-shell"
 import { TypingIndicator } from "./typing-indicator"
-import { AlertCircle, Bot, RefreshCw } from "lucide-react"
+import { AlertCircle, Bot, RefreshCw, ArrowDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 interface MessageListProps {
@@ -21,63 +21,81 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded, o
   const bottomRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const rafRef = useRef<number | null>(null)
-  const lastScrollRef = useRef<number>(0)
+  const autoScrollRef = useRef(true)
 
+  const setAuto = (v: boolean) => {
+    autoScrollRef.current = v
+    setAutoScroll(v)
+  }
+
+  // A single continuous RAF loop owns auto-scrolling. While we're following, it
+  // eases toward the bottom every frame so new messages, streamed text, and
+  // growing tool lists glide instead of jumping. It NEVER fights the user:
+  // user intent (wheel/touch up) flips following off below, and the loop only
+  // moves downward toward the bottom, never upward.
   useEffect(() => {
-    if (!containerRef.current) return
-    // Immediate scroll to bottom when messages change
     const container = containerRef.current
-    container.scrollTop = container.scrollHeight
-    setAutoScroll(true)
+    if (!container) return
+
+    const tick = () => {
+      if (autoScrollRef.current) {
+        const target = container.scrollHeight - container.clientHeight
+        const current = container.scrollTop
+        const diff = target - current
+        if (diff > 0.5) {
+          const step = Math.max(diff * 0.22, Math.min(diff, 1.5))
+          container.scrollTop = current + step
+        }
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+
+    rafRef.current = requestAnimationFrame(tick)
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+  }, [])
+
+  // User intent: scrolling up (wheel up / touch drag down) immediately stops
+  // following so the view stays put. This is the authoritative signal — it
+  // can't be confused with our own programmatic scrolling.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) setAuto(false)
+    }
+    let touchY = 0
+    const onTouchStart = (e: TouchEvent) => { touchY = e.touches[0]?.clientY ?? 0 }
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY ?? 0
+      if (y > touchY + 2) setAuto(false) // dragging down = scrolling content up
+      touchY = y
+    }
+
+    container.addEventListener("wheel", onWheel, { passive: true })
+    container.addEventListener("touchstart", onTouchStart, { passive: true })
+    container.addEventListener("touchmove", onTouchMove, { passive: true })
+    return () => {
+      container.removeEventListener("wheel", onWheel)
+      container.removeEventListener("touchstart", onTouchStart)
+      container.removeEventListener("touchmove", onTouchMove)
+    }
+  }, [])
+
+  // A brand-new message re-engages following so we track the latest turn.
+  useEffect(() => {
+    setAuto(true)
   }, [messages.length])
 
-  useEffect(() => {
-    if (!isStreaming || !autoScroll || !containerRef.current) {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-      return
-    }
-
-    const container = containerRef.current
-    lastScrollRef.current = container.scrollTop
-
-    const smoothScroll = () => {
-      if (!container) return
-
-      const { scrollHeight, clientHeight } = container
-      const targetScroll = scrollHeight - clientHeight
-      const currentScroll = lastScrollRef.current
-      const diff = targetScroll - currentScroll
-
-      if (diff > 0.5) {
-        const newScroll = currentScroll + diff * 0.03
-        lastScrollRef.current = newScroll
-        container.scrollTop = newScroll
-      }
-
-      rafRef.current = requestAnimationFrame(smoothScroll)
-    }
-
-    // Start immediately
-    rafRef.current = requestAnimationFrame(smoothScroll)
-
-    return () => {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-    }
-  }, [isStreaming, autoScroll])
-
-  // Detect if user scrolls up to disable auto-scroll
+  // Re-engage following once the user scrolls back near the bottom.
   const handleScroll = () => {
-    if (!containerRef.current || isStreaming) return
-
+    if (!containerRef.current) return
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 150
-    setAutoScroll(isAtBottom)
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 80
+    if (isAtBottom && !autoScrollRef.current) setAuto(true)
   }
 
   const lastMessage = messages[messages.length - 1]
@@ -96,6 +114,7 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded, o
   }
 
   return (
+    <>
     <div
       ref={containerRef}
       onScroll={handleScroll}
@@ -140,8 +159,6 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded, o
       {/* Messages */}
       {messages
         .filter((message) => {
-          // Hide empty assistant messages during streaming only if they don't have toolSteps.
-          // If they have toolSteps, show them immediately so the timeline is visible!
           if (isStreaming && message.role === "assistant" && message === lastMessage && message.content === "" && (!message.toolSteps || message.toolSteps.length === 0)) {
             return false
           }
@@ -189,5 +206,18 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded, o
       {/* Scroll anchor */}
       <div ref={bottomRef} aria-hidden="true" className="h-20" />
     </div>
+
+    {/* Jump to latest — appears only when the user has scrolled up */}
+    {!autoScroll && messages.length > 0 && (
+      <button
+        onClick={() => setAuto(true)}
+        className="absolute bottom-36 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 rounded-full bg-white/90 backdrop-blur border border-stone-200 shadow-[0_4px_20px_rgba(0,0,0,0.08)] px-3.5 py-2 text-[13px] font-medium text-stone-600 hover:text-stone-900 hover:shadow-[0_6px_24px_rgba(0,0,0,0.12)] hover:-translate-y-[1px] transition-all duration-200 animate-in fade-in slide-in-from-bottom-2"
+        aria-label="Jump to latest message"
+      >
+        <ArrowDown size={14} strokeWidth={2} />
+        {isStreaming ? "Follow along" : "Jump to latest"}
+      </button>
+    )}
+    </>
   )
 }

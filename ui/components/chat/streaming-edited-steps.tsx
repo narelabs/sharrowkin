@@ -30,7 +30,7 @@ function shortenPath(path: string): string {
 export function StreamingEditedSteps({ edits, className, onFileClick, onOpenWorkspace, isStreaming = false }: StreamingEditedStepsProps) {
   const [visibleEdits, setVisibleEdits] = useState<FileEdit[]>([])
 
-  // Simulate streaming: show edits one by one
+  // Simulate streaming: reveal edits one by one
   useEffect(() => {
     if (edits.length === 0) {
       setVisibleEdits([])
@@ -43,26 +43,29 @@ export function StreamingEditedSteps({ edits, className, onFileClick, onOpenWork
       return
     }
 
-    // Show edits progressively only when streaming
-    let currentIndex = 0
+    // Reveal progressively. We always set a PREFIX of `edits` (via slice),
+    // never append onto previous state — appending caused stale/duplicate and
+    // even `undefined` entries when `edits` updated mid-interval.
+    let revealed = 0
+    setVisibleEdits([])
     const interval = setInterval(() => {
-      if (currentIndex < edits.length) {
-        setVisibleEdits((prev) => [...prev, edits[currentIndex]])
-        currentIndex++
-      } else {
+      revealed++
+      setVisibleEdits(edits.slice(0, revealed))
+      if (revealed >= edits.length) {
         clearInterval(interval)
       }
-    }, 800) // Show one edit every 800ms
+    }, 800) // Reveal one edit every 800ms
 
     return () => clearInterval(interval)
   }, [edits, isStreaming])
 
-  if (visibleEdits.length === 0) return null
+  const safeEdits = visibleEdits.filter((e): e is FileEdit => Boolean(e && e.filename))
+  if (safeEdits.length === 0) return null
 
   return (
     <div className={cn("space-y-2", className)}>
       <AnimatePresence mode="popLayout">
-        {visibleEdits.map((edit, index) => (
+        {safeEdits.map((edit, index) => (
           <motion.div
             key={`${edit.filename}-${index}`}
             initial={{ opacity: 0, y: 10, scale: 0.95 }}

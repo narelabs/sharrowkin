@@ -93,17 +93,66 @@ class SegmentIndex:
         )
         self._size += 1
 
-    def search(self, query_embedding: list[float], k: int) -> list[tuple[str, float]]:
+    def search(self, query_embedding: list[float], k: int, offset: int = 0) -> list[tuple[str, float]]:
+        """Search with pagination support to prevent memory leaks.
+
+        Args:
+            query_embedding: Query vector
+            k: Number of results to return
+            offset: Number of results to skip (for pagination)
+        """
         if not self._initialized or self._size == 0:
             return []
-            
+
+        # Limit k to prevent excessive memory usage
+        k = min(k, 1000)  # Max 1000 results per query
+
         search_result = self.client.query_points(
             collection_name=self.collection_name,
             query=query_embedding,
-            limit=max(0, k)
+            limit=max(0, k),
+            offset=offset
         )
-        
+
         return [(hit.payload["segment_id"], hit.score) for hit in search_result.points]
+
+    def batch_search(self, queries: list[list[float]], k: int) -> list[list[tuple[str, float]]]:
+        """✅ NEW: Batch search for multiple queries at once.
+
+        Args:
+            queries: List of query vectors
+            k: Number of results per query
+
+        Returns:
+            List of search results, one per query
+        """
+        if not self._initialized or self._size == 0:
+            return [[] for _ in queries]
+
+        # Limit k to prevent excessive memory usage
+        k = min(k, 1000)
+
+        results = []
+        # Process in batches of 10 to avoid overwhelming the server
+        batch_size = 10
+        for i in range(0, len(queries), batch_size):
+            batch = queries[i:i + batch_size]
+            batch_results = []
+
+            for query in batch:
+                search_result = self.client.query_points(
+                    collection_name=self.collection_name,
+                    query=query,
+                    limit=k
+                )
+                batch_results.append([
+                    (hit.payload["segment_id"], hit.score)
+                    for hit in search_result.points
+                ])
+
+            results.extend(batch_results)
+
+        return results
 
     @property
     def size(self) -> int:

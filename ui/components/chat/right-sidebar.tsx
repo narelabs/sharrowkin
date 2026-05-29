@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useEffect, useCallback } from "react"
-import { Terminal as TerminalIcon, BookOpen, Settings, Cpu, Wifi, ArrowDownToLine, CheckSquare2, AlertTriangle, CheckCircle2, CircleDashed, Loader2, Brain, Wrench, GitPullRequest, KeyRound, Rocket } from "lucide-react"
+import { Terminal as TerminalIcon, BookOpen, Cpu, Wifi, ArrowDownToLine, CheckSquare2, AlertTriangle, CheckCircle2, CircleDashed, Loader2, Wrench, GitPullRequest, KeyRound, Rocket } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { TerminalEmulator } from "./terminal-emulator"
 import { AgentTasks } from "./agent-tasks"
@@ -80,14 +80,14 @@ export function RightSidebar({
   onDragEnd,
   agentState,
   phases,
-  projectIntelligence,
+  projectIntelligence = { status: "unknown" },
   toolActivity,
   contextStatus,
   runtimeHints,
-  diffStatus,
-  testStatus,
+  diffStatus = { status: "none" },
+  testStatus = { status: "idle" },
   selectedModel,
-  backendUrl: BACKEND_URL,
+  backendUrl: BACKEND_URL = "",
   backendConnected,
   cognitiveState: propCognitiveState,
   setCognitiveState: propSetCognitiveState,

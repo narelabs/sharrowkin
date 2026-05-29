@@ -30,11 +30,45 @@ export default function WorkflowPage() {
   const [isSaving, setIsSaving] = useState(false)
 
   // Load workspace path from localStorage
+  // Auto-detect workspace from backend settings
   useEffect(() => {
-    const savedPath = localStorage.getItem("workspace_path")
-    if (savedPath) {
-      setWorkspacePath(savedPath)
+    async function detectWorkspace() {
+      // 1. Try localStorage first
+      const savedPath = localStorage.getItem("workspace_path") ||
+                       localStorage.getItem("sharrowkin-workspace-path")
+      if (savedPath) {
+        setWorkspacePath(savedPath)
+        return
+      }
+
+      // 2. Ask backend for current workspace
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/settings`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.workspace_path) {
+            setWorkspacePath(data.workspace_path)
+            localStorage.setItem("workspace_path", data.workspace_path)
+            return
+          }
+        }
+      } catch {}
+
+      // 3. Try backend workspace/detect endpoint
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/workspace/detect`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.path) {
+            setWorkspacePath(data.path)
+            localStorage.setItem("workspace_path", data.path)
+            return
+          }
+        }
+      } catch {}
     }
+
+    detectWorkspace()
   }, [])
 
   const handleSearch = useCallback(async (query: string) => {
@@ -261,9 +295,6 @@ export default function WorkflowPage() {
                 placeholder="Enter workspace path..."
                 className="w-full px-3 py-2 text-[12px] bg-white border border-stone-200 rounded-lg outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/20 transition-all"
               />
-              <p className="text-[10px] text-stone-500 mt-1.5">
-                Example: C:\Users\user\Documents\project
-              </p>
             </div>
 
             {showSearch ? (

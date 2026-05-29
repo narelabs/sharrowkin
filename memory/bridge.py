@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 try:
     from memory.dsm.core.memory import DynamicSegmentedMemory
@@ -31,6 +34,7 @@ class MemoryBridge:
         self.disabled_reason = ""
         self.rld = None
         self.dsm = None
+        self._closed = False  # ✅ NEW: Track if resources are closed
 
         # Instantiate memory field and trace memory
         from memory.field import MemoryField
@@ -47,6 +51,58 @@ class MemoryBridge:
             dsm_memory=self.dsm,
         )
 
+    def __del__(self):
+        """✅ NEW: Cleanup resources on deletion."""
+        self.close()
+
+    def close(self):
+        """✅ NEW: Explicitly close all memory resources and save state."""
+        if self._closed:
+            return
+
+        try:
+            # Cleanup old segments before saving
+            if self.dsm is not None:
+                try:
+                    # Prune low-priority segments and compress similar ones
+                    stats = self.dsm.maintain(
+                        max_segments=1000,  # Keep max 1000 segments
+                        min_priority=0.1,   # Remove segments with priority < 0.1
+                        compress_similarity=0.78
+                    )
+                    print(f"[MemoryBridge] DSM maintenance: {stats}")
+                except Exception as e:
+                    print(f"[MemoryBridge] DSM maintenance error: {e}")
+
+            # Save all memory systems
+            if self.dsm is not None:
+                self.dsm.save()
+            if self.rld is not None:
+                self.rld.save()
+            if self.memory_field is not None:
+                self.memory_field.save()
+            if self.trace_memory is not None:
+                self.trace_memory.save()
+
+            # Close Qdrant connections properly
+            from memory.db_config import close_qdrant_client
+            close_qdrant_client()
+
+            # Clear large data structures to free memory
+            if self.dsm is not None:
+                self.dsm.segments.clear()
+            if self.rld is not None and hasattr(self.rld, 'genes'):
+                self.rld.genes.clear()
+            if self.trace_memory is not None:
+                # Keep only last 50 traces in memory
+                if len(self.trace_memory.traces) > 50:
+                    self.trace_memory.traces = self.trace_memory.traces[-50:]
+
+            self._closed = True
+            print(f"[MemoryBridge] Resources closed and saved for {self.workspace}")
+        except Exception as e:
+            print(f"[MemoryBridge] Error during cleanup: {e}")
+
     @property
     def enabled(self) -> bool:
         return self.rld is not None and self.dsm is not None
@@ -56,8 +112,13 @@ class MemoryBridge:
         structured = self.recall_structured(task)
         return structured["full_context"]
 
-    def recall_structured(self, task: str) -> dict:
-        """Retrieve structured memory context with separate sections for better LLM prompting."""
+    def recall_structured(self, task: str, conversation_context: str = None) -> dict:
+        """Retrieve structured memory context with separate sections for better LLM prompting.
+
+        Args:
+            task: Current task/query
+            conversation_context: Recent conversation history for context
+        """
         # 1. Get query embedding dynamically
         embedding = [0.0] * 128
         if self.rld and self.rld.embedding_model:
@@ -71,57 +132,55 @@ class MemoryBridge:
             embedding = HashEmbeddingModel().encode(task)
 
         # 2. Query trace memory (Trace Replay) - похожие решения
-        # ✅ OPTIMIZE: Limit to 5 traces instead of 2 for better context
-        traces = self.trace_memory.find_similar_traces(task, embedding, limit=5)
+        # ✅ OPTIMIZE: Limit to 3 traces (reduced from 5) to save context
+        traces = self.trace_memory.find_similar_traces(task, embedding, limit=3)
         similar_solutions = []
         trace_replay_context = ""
         if traces:
-            trace_replay_context = "\n\n=== REASONING TRACE REPLAY (Similar Past Solutions) ===\n"
+            trace_replay_context = "\n\n=== TRACE REPLAY (Past Solutions) ===\n"
             for idx, t in enumerate(traces, 1):
-                trace_replay_context += f"\n[Solution {idx}] Task: {t['task']}\n"
-                trace_replay_context += f"  Similarity: {t['similarity']:.2f}\n"
-                trace_replay_context += f"  Tools Used: {', '.join(t['tools_used'][:5])}\n"  # ✅ Increased to 5 tools
+                trace_replay_context += f"\n[{idx}] {t['task'][:80]}... (sim: {t['similarity']:.2f})\n"
+                trace_replay_context += f"  Tools: {', '.join(t['tools_used'][:3])}\n"
 
                 solution_data = {
                     "task": t['task'],
                     "similarity": t['similarity'],
-                    "tools_used": t['tools_used'][:5],  # ✅ Increased to 5 tools
+                    "tools_used": t['tools_used'][:3],
                     "actions": [],
                     "result": ""
                 }
 
                 if "summary" in t:
                     sum_data = t["summary"]
-                    trace_replay_context += f"  Key Actions:\n"
-                    # ✅ OPTIMIZE: Increased to 5 actions for better context
-                    for act in sum_data.get("brief_actions", [])[:5]:
-                        trace_replay_context += f"    * {act[:150]}\n"  # ✅ Increased to 150 chars
-                        solution_data["actions"].append(act[:150])
-                    # ✅ OPTIMIZE: Increased result to 500 chars for full context
-                    result = sum_data.get('brief_final_answer', '')[:500]
+                    trace_replay_context += f"  Actions:\n"
+                    # ✅ OPTIMIZE: Reduced to 3 actions, 100 chars each
+                    for act in sum_data.get("brief_actions", [])[:3]:
+                        trace_replay_context += f"    • {act[:100]}\n"
+                        solution_data["actions"].append(act[:100])
+                    # ✅ OPTIMIZE: Reduced result to 300 chars
+                    result = sum_data.get('brief_final_answer', '')[:300]
                     trace_replay_context += f"  Result: {result}\n"
                     solution_data["result"] = result
                 else:
                     trace_replay_context += f"  Actions:\n"
-                    for act in t['actions'][:5]:  # ✅ Increased to 5 actions
-                        trace_replay_context += f"    * {act[:150]}\n"  # ✅ Increased to 150 chars
-                        solution_data["actions"].append(act[:150])
-                    result = t['final_answer'][:500]  # ✅ Increased to 500 chars
+                    for act in t['actions'][:3]:
+                        trace_replay_context += f"    • {act[:100]}\n"
+                        solution_data["actions"].append(act[:100])
+                    result = t['final_answer'][:300]
                     trace_replay_context += f"  Result: {result}\n"
                     solution_data["result"] = result
 
                 similar_solutions.append(solution_data)
 
         # 3. Retrieve memory field state attractors - стратегии
-        # ✅ OPTIMIZE: Limit to 5 associations instead of 8
-        associations = self.memory_field.get_top_associations(limit=5)
+        # ✅ OPTIMIZE: Limit to 3 associations (reduced from 5)
+        associations = self.memory_field.get_top_associations(limit=3)
         strategy_hints = []
         assoc_context = ""
         if associations:
-            assoc_context = "\n\n=== MEMORYFIELD STRATEGY ATTRACTORS ===\n"
-            assoc_context += "Successful phase transitions (learned from past executions):\n"
+            assoc_context = "\n\n=== STRATEGY ATTRACTORS ===\n"
             for a in associations:
-                assoc_context += f"- {a['source']} → {a['target']} (strength: {a['weight']:.3f})\n"
+                assoc_context += f"- {a['source']} → {a['target']} ({a['weight']:.2f})\n"
                 strategy_hints.append({
                     "from": a['source'],
                     "to": a['target'],
@@ -151,7 +210,7 @@ class MemoryBridge:
         dsm_segments = []
         dsm_context_text = ""
         if self.enabled and self.dsm is not None:
-            dsm_context: ActiveContext = self.dsm.active_context(task, k=10)  # ✅ Increased from 5 to 10
+            dsm_context: ActiveContext = self.dsm.active_context(task, k=5)  # ✅ Reduced from 10 to 5
             dsm_context_text = dsm_context.context_text
             for route_result in dsm_context.selected:
                 seg = route_result.segment
@@ -159,11 +218,17 @@ class MemoryBridge:
                     "description": seg.description,
                     "category": "/".join(seg.category_path),
                     "importance": seg.priorities.importance,
-                    "text_preview": seg.text[:200]
+                    "text_preview": seg.text[:150]  # ✅ Reduced from 200 to 150
                 })
 
         # 6. Build combined context
         combined = ""
+
+        # ✅ NEW: Add conversation context if provided
+        if conversation_context:
+            combined += "=== RECENT CONVERSATION ===\n"
+            combined += conversation_context + "\n\n"
+
         if rld_context_text:
             combined += rld_context_text + "\n\n"
         if dsm_context_text:
@@ -174,6 +239,24 @@ class MemoryBridge:
             combined += self._fallback_context(task) + "\n\n"
 
         combined += trace_replay_context + assoc_context
+
+        # ✅ NEW: Log context size and truncate if needed
+        context_length = len(combined)
+        estimated_tokens = context_length // 4  # Rough estimate: 1 token ≈ 4 chars
+
+        logger.info(f"Built memory context: {context_length} chars (~{estimated_tokens} tokens)")
+        if conversation_context:
+            logger.info(f"  - Conversation context: {len(conversation_context)} chars")
+        if rld_context_text:
+            logger.info(f"  - RLD context: {len(rld_context_text)} chars")
+        if dsm_context_text:
+            logger.info(f"  - DSM context: {len(dsm_context_text)} chars")
+
+        # ✅ NEW: Truncate if context is too large (>12000 tokens ≈ 48000 chars)
+        MAX_CONTEXT_CHARS = 48000  # Reduced from 64000 to fit better in LLM context
+        if context_length > MAX_CONTEXT_CHARS:
+            logger.warning(f"Context too large ({context_length} chars), truncating to {MAX_CONTEXT_CHARS}")
+            combined = combined[:MAX_CONTEXT_CHARS] + "\n\n[... context truncated ...]"
 
         return {
             "full_context": combined,
@@ -271,6 +354,101 @@ class MemoryBridge:
         self.memory_field.update_symbolic("Recall", "Reason", success=True)
         self.memory_field.update_symbolic("Reason", "Stabilize", success=True)
         self.memory_field.update_symbolic("Stabilize", "Commit", success=True)
+
+        # ✅ NEW: Write successful solution to DSM for future recall
+        if self.enabled and self.dsm is not None:
+            # Determine category based on tools used
+            category_path = ("Solutions", "General")
+            if "pytest" in tools_used or "test" in task.lower():
+                category_path = ("Solutions", "Testing")
+            elif "github" in " ".join(tools_used):
+                category_path = ("Solutions", "GitHub")
+            elif any(tool in tools_used for tool in ["file_writer", "file_editor"]):
+                category_path = ("Solutions", "Code Changes")
+            elif "terminal" in tools_used:
+                category_path = ("Solutions", "Terminal")
+
+            # Build solution description
+            solution_text = f"Task: {task}\n\n"
+            solution_text += f"Tools: {', '.join(tools_used[:5])}\n\n"
+            if changed_files:
+                solution_text += f"Changed files: {', '.join(changed_files[:5])}\n\n"
+            solution_text += f"Actions:\n"
+            for action in actions[:5]:
+                solution_text += f"- {action[:200]}\n"
+            solution_text += f"\nResult: {final_answer[:500]}"
+
+            # Write to DSM with importance based on complexity
+            importance = min(0.8, 0.5 + len(actions) * 0.05 + len(tools_used) * 0.03)
+
+            self.dsm.write(
+                solution_text,
+                description=f"Solution: {task[:100]}",
+                category_path=category_path,
+                importance=importance,
+                metadata={
+                    "source": "sharrowkin_commit",
+                    "tools_used": tools_used[:5],
+                    "changed_files": changed_files[:5] if changed_files else []
+                }
+            )
+            self.dsm.save()
+            logger.info(f"Saved solution to DSM: {category_path}, importance={importance:.2f}")
+
+    def learn_failure(
+        self,
+        *,
+        task: str,
+        states: list[str],
+        actions: list[str],
+        error_message: str,
+        tools_used: list[str],
+        changed_files: list[str] | None = None,
+    ) -> None:
+        """Record a failed attempt for learning and preventing repeated errors.
+
+        Args:
+            task: The task that failed
+            states: List of state descriptions during execution
+            actions: List of actions taken
+            error_message: The error that occurred
+            tools_used: Tools that were used
+            changed_files: Files that were modified (if any)
+        """
+        logger.warning(f"Recording failure for task: {task[:100]}...")
+
+        # Encode task for trace indexing
+        embedding = [0.0] * 128
+        if self.rld and self.rld.embedding_model:
+            try:
+                embedding = self.rld.embedding_model.encode(task)
+            except Exception:
+                from memory.dsm.indexing.embedding import HashEmbeddingModel
+                embedding = HashEmbeddingModel().encode(task)
+        else:
+            from memory.dsm.indexing.embedding import HashEmbeddingModel
+            embedding = HashEmbeddingModel().encode(task)
+
+        # Store failed trace in trace memory
+        energy_used = 1.0 + len(states) * 0.15 + len(actions) * 0.35
+        self.trace_memory.add_trace(
+            task=task,
+            states=states,
+            actions=actions,
+            final_answer=f"FAILED: {error_message}",
+            success=False,  # ✅ Mark as failure
+            tools_used=tools_used,
+            energy_used=energy_used,
+            task_embedding=embedding
+        )
+
+        # Update MemoryField with negative reinforcement
+        # This weakens the phase transitions that led to failure
+        if len(states) >= 2:
+            self.memory_field.update_symbolic("Reason", "Stabilize", success=False)
+            self.memory_field.update_symbolic("Stabilize", "Commit", success=False)
+
+        logger.info(f"Failure recorded in TraceMemory. Total traces: {len(self.trace_memory.traces)}")
 
         if not self.enabled or self.rld is None or self.dsm is None:
             return

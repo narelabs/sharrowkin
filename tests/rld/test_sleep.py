@@ -3,7 +3,7 @@
 import time
 from pathlib import Path
 
-from rld import RecursiveLatentDNA
+from memory.rld import RecursiveLatentDNA
 
 
 def test_sleep_entropic_decay_reduces_stability(tmp_path: Path) -> None:

@@ -12,12 +12,12 @@ class LLMConfig(BaseModel):
     model: str = "gemini-2.5-pro"
     temperature: float = 0.1
     max_output_tokens: int = 8192
-    timeout_seconds: int = 60
+    timeout_seconds: int = 180  # ✅ FIXED: Increased from 60 to prevent timeouts
 
 
 class MemoryConfig(BaseModel):
-    dsm_path: str = ".sharrowkin/dsm"
-    rld_path: str = ".sharrowkin/rld"
+    dsm_path: Path = Field(default=Path(".sharrowkin/dsm"))
+    rld_path: Path = Field(default=Path(".sharrowkin/rld"))
     enable_rld: bool = True
     decay_rate: float = 0.05
     max_segments: int = 1000

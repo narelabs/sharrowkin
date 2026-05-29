@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from narefield.core.field import NAREField
+from .field import NAREField
 
 
 class LatentObserver:

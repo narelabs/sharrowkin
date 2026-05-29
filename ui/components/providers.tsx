@@ -5,6 +5,8 @@ import { Toaster } from "sonner"
 import { CommandPalette } from "@/components/chat/command-palette"
 import { ConnectionStatus } from "@/components/chat/connection-status"
 import { ErrorBoundary } from "@/components/error-boundary"
+import { ThemeProvider } from "@/components/theme-provider"
+import { TokenProvider } from "@/components/visual/token-provider"
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
@@ -26,7 +28,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <ErrorBoundary>
-      {children}
+      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
+        <TokenProvider>
+          {children}
+        </TokenProvider>
+      </ThemeProvider>
       <ConnectionStatus />
       <Toaster
         position="bottom-right"

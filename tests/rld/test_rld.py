@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from rld import GENE_SCHEMA, RecursiveLatentDNA
+from memory.rld import GENE_SCHEMA, RecursiveLatentDNA
 
 
 def test_observe_generates_reasoning_gene_and_activates_it(tmp_path: Path) -> None:

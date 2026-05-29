@@ -21,21 +21,16 @@ if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
 
 # Setup paths
 BACKEND_DIR = Path(__file__).resolve().parent
-REPO_ROOT = BACKEND_DIR.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-# Create a dummy backend module so absolute imports from 'backend' work
-import types
-if 'backend' not in sys.modules:
-    backend_pkg = types.ModuleType('backend')
-    backend_pkg.__path__ = [str(BACKEND_DIR)]
-    sys.modules['backend'] = backend_pkg
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# Setup structured logging with session_id correlation BEFORE any imports
+# that might log during module load.
+from core.logging_ctx import setup_logging
+setup_logging()
 
 # Import routers
 from api import github_router, agent_router, system_router
@@ -107,7 +102,7 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8000,
         reload=True,
         ws_ping_interval=30.0,  # Send ping every 30 seconds

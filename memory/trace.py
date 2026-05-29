@@ -9,35 +9,39 @@ from memory.dsm.indexing.embedding import cosine
 
 class TraceMemory:
     """Tracks historical reasoning traces for trace_replay queries."""
-    
+
+    # Memory leak prevention: limit stored traces
+    MAX_TRACES_IN_MEMORY = 200  # Keep last 200 traces in memory
+    MAX_TRACES_ON_DISK = 100    # Save last 100 traces to disk
+
     def __init__(self, filepath: Path) -> None:
         self.filepath = Path(filepath)
         self.traces: list[dict] = []
         self.load()
         
     def load(self) -> None:
-        """Load traces from disk."""
+        """Load traces from disk with memory limit."""
         if not self.filepath.exists():
             self.traces = []
             return
-            
+
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    self.traces = data
+                    self.traces = data[-self.MAX_TRACES_IN_MEMORY:]
                 else:
-                    self.traces = data.get("traces", [])
+                    self.traces = data.get("traces", [])[-self.MAX_TRACES_IN_MEMORY:]
         except Exception as e:
             print(f"[TraceMemory] Error loading trace memory, initializing empty: {e}")
             self.traces = []
             
     def save(self) -> None:
-        """Save traces to disk."""
+        """Save traces to disk with size limit."""
         try:
             self.filepath.parent.mkdir(parents=True, exist_ok=True)
             with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump({"traces": self.traces[-100:]}, f, indent=2) # Keep last 100 traces
+                json.dump({"traces": self.traces[-self.MAX_TRACES_ON_DISK:]}, f, indent=2)
         except Exception as e:
             print(f"[TraceMemory] Error saving trace memory: {e}")
             
@@ -132,6 +136,11 @@ class TraceMemory:
             "task_embedding": task_embedding
         }
         self.traces.append(trace)
+
+        # Enforce memory limit
+        if len(self.traces) > self.MAX_TRACES_IN_MEMORY:
+            self.traces = self.traces[-self.MAX_TRACES_IN_MEMORY:]
+
         self.save()
         
     def find_similar_traces(
@@ -139,12 +148,24 @@ class TraceMemory:
         query: str,
         query_embedding: list[float],
         limit: int = 2,
-        min_similarity: float = 0.55
+        min_similarity: float = 0.55,
+        offset: int = 0
     ) -> list[dict]:
-        """Query trace memory using hybrid cosine similarity of task embeddings and token Jaccard overlap."""
+        """Query trace memory using hybrid cosine similarity of task embeddings and token Jaccard overlap.
+
+        Args:
+            query: Query string
+            query_embedding: Query embedding vector
+            limit: Maximum number of results to return (capped at 50)
+            min_similarity: Minimum similarity threshold
+            offset: Number of results to skip (for pagination)
+        """
         if not self.traces:
             return []
-            
+
+        # Cap limit to prevent excessive memory usage
+        limit = min(limit, 50)
+
         scored_traces = []
         for trace in self.traces:
             # 1. Cosine similarity score
@@ -152,28 +173,31 @@ class TraceMemory:
             vector_sim = 0.0
             if query_embedding and trace_emb and len(trace_emb) == len(query_embedding):
                 vector_sim = cosine(query_embedding, trace_emb)
-                
+
             # 2. Jaccard token similarity score
             jaccard_sim = self._calculate_jaccard_and_keywords(query, trace.get("task", ""))
-            
+
             # 3. Hybrid scoring formula
             if query_embedding:
                 hybrid_sim = 0.5 * vector_sim + 0.5 * jaccard_sim
             else:
                 hybrid_sim = jaccard_sim  # 100% fallback to Jaccard
-                
+
             if hybrid_sim >= min_similarity:
                 scored_traces.append((hybrid_sim, trace))
-                
+
         # Sort descending by hybrid similarity
         scored_traces.sort(key=lambda x: x[0], reverse=True)
-        
+
+        # Apply pagination
+        paginated_traces = scored_traces[offset:offset + limit]
+
         # Return limit traces, removing the raw embeddings to conserve context space
         results = []
-        for sim, trace in scored_traces[:limit]:
+        for sim, trace in paginated_traces:
             clean_trace = trace.copy()
             clean_trace.pop("task_embedding", None)
             clean_trace["similarity"] = round(sim, 3)
             results.append(clean_trace)
-            
+
         return results

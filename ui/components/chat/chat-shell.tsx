@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { useSearchParams } from "next/navigation"
-import { ArrowDownToLine, MessageSquareDashed, PanelRight } from "lucide-react"
+import { ArrowDownToLine, MessageSquareDashed, PanelRight, Cpu } from "lucide-react"
 import { MessageList } from "./message-list"
 import { Composer, type AIModel } from "./composer"
 import { Button } from "@/components/ui/button"
@@ -13,6 +13,8 @@ import { FileDiffViewer } from "./file-diff-viewer"
 
 import { DiffViewer } from "./diff-viewer"
 import { TerminalEmulator } from "./terminal-emulator"
+import { AgentComputer, type AgentComputerView, type AgentFile } from "./agent-computer"
+import { TaskTimelinePanel, type TimelineStep } from "./task-timeline-panel"
 import { cn } from "@/lib/utils"
 
 // Backend URL — configurable via env var, defaults to localhost
@@ -25,6 +27,8 @@ export interface ToolStep {
   name: string
   status: "running" | "done" | "error"
   description?: string
+  args?: Record<string, unknown>
+  result?: string
 }
 
 export interface TaskPlan {
@@ -191,6 +195,13 @@ export function ChatShell() {
   const [activeDiffFile, setActiveDiffFile] = useState<string | null>(null)
   const [lastDiffContent, setLastDiffContent] = useState("")
   const [fileDiffs, setFileDiffs] = useState<Map<string, string>>(new Map()) // Store diff per file
+
+  // --- Agent Computer (Devin-style live pane) ---
+  const [agentComputerOpen, setAgentComputerOpen] = useState(true)
+  const [agentComputerView, setAgentComputerView] = useState<AgentComputerView>("editor")
+  const [agentFiles, setAgentFiles] = useState<Map<string, AgentFile>>(new Map())
+  const [agentActiveFile, setAgentActiveFile] = useState<string | null>(null)
+  const [agentAction, setAgentAction] = useState<string>("")
   const [agentState, setAgentState] = useState<AgentState>({ status: "idle", message: "Workspace ready" })
   const [agentPhases, setAgentPhases] = useState<AgentPhase[]>(DEFAULT_PHASES)
   const [projectIntelligence, setProjectIntelligence] = useState<ProjectIntelligence>({ status: "unknown" })
@@ -220,6 +231,79 @@ export function ChatShell() {
   const backendConnected = agentState.status !== "error" || !error
 
   const workspacePath = useMemo(() => projectIntelligence.workspacePath || "active workspace", [projectIntelligence.workspacePath])
+
+  // Derive timeline steps from agentPhases + toolActivity for the TaskTimelinePanel
+  const timelineSteps: TimelineStep[] = useMemo(() => {
+    const steps: TimelineStep[] = []
+
+    // Convert agent phases into top-level timeline steps
+    for (const phase of agentPhases) {
+      const phaseId = phase.id
+      const status = phase.status === "running" ? "running"
+        : phase.status === "done" ? "done"
+        : phase.status === "error" ? "error"
+        : "pending"
+
+      // Gather tool activities that belong to this phase (by timing or current phase)
+      const phaseTools = toolActivity.filter((t) => {
+        // Simple heuristic: associate tools with the current running phase
+        if (agentState.phase && normalizePhaseName(agentState.phase) === phaseId && status === "running") {
+          return true
+        }
+        return false
+      })
+
+      const children: TimelineStep[] = phaseTools.map((t) => ({
+        id: t.id,
+        label: t.name + (t.target ? ` · ${t.target}` : ""),
+        status: t.status === "running" ? "running"
+          : t.status === "done" ? "done"
+          : t.status === "error" ? "error"
+          : "pending",
+        duration: t.durationMs ? `${Math.round(t.durationMs / 1000)}s` : undefined,
+      }))
+
+      let duration: string | undefined
+      if (phase.startedAt && phase.completedAt) {
+        const ms = new Date(phase.completedAt).getTime() - new Date(phase.startedAt).getTime()
+        duration = ms < 1000 ? `${ms}ms` : `${Math.round(ms / 1000)}s`
+      }
+
+      steps.push({
+        id: phaseId,
+        label: phase.label,
+        status,
+        phase: phaseId,
+        duration,
+        children: children.length > 0 ? children : undefined,
+      })
+    }
+
+    // Also add any tool activities that are currently running as individual steps
+    // if they aren't already captured under a phase
+    const runningTools = toolActivity.filter((t) => t.status === "running")
+    for (const tool of runningTools) {
+      if (!steps.some((s) => s.children?.some((c) => c.id === tool.id))) {
+        steps.push({
+          id: `tool-${tool.id}`,
+          label: tool.name + (tool.target ? ` · ${tool.target}` : ""),
+          status: "running",
+          phase: agentState.phase ? normalizePhaseName(agentState.phase) : undefined,
+          duration: tool.durationMs ? `${Math.round(tool.durationMs / 1000)}s` : undefined,
+        })
+      }
+    }
+
+    return steps
+  }, [agentPhases, toolActivity, agentState.phase])
+
+  const timelineProgress = useMemo(() => {
+    const total = agentPhases.length || 1
+    const done = agentPhases.filter((p) => p.status === "done").length
+    return done / total
+  }, [agentPhases])
+
+  const isAgentActive = agentState.status !== "idle" && agentState.status !== "done" && agentState.status !== "stopped"
 
   // --- LIFTED TERMINAL EMULATOR STATE ---
   const [terminalLines, setTerminalLines] = useState<string[]>([
@@ -415,7 +499,7 @@ export function ChatShell() {
       if (repo && repo.full_name) {
         // Send message to agent with selected repository
         const message = `Я выбрал репозиторий: ${repo.full_name}`
-        handleSendMessage(message)
+        sendMessage(message)
       }
     }
 
@@ -526,10 +610,10 @@ export function ChatShell() {
       };
 
       const appendStep = (step: Omit<ToolStep, "id"> & { id?: string }) => {
-        const entry: ToolStep = { id: step.id || generateId(), name: step.name, status: step.status, description: step.description }
+        const entry: ToolStep = { id: step.id || generateId(), name: step.name, status: step.status, description: step.description, args: step.args, result: step.result }
         const existingIndex = currentSteps.findIndex((item) => item.id === entry.id)
         const nextSteps = existingIndex >= 0
-          ? currentSteps.map((item, index) => index === existingIndex ? entry : item)
+          ? currentSteps.map((item, index) => index === existingIndex ? { ...item, ...entry, args: entry.args ?? item.args, result: entry.result || item.result } : item)
           : [...currentSteps, entry].slice(-24)
         updateSteps(nextSteps)
       }
@@ -646,12 +730,15 @@ export function ChatShell() {
               // Update tool steps based on phase
               const phaseNames: Record<string, string> = {
                 observe: "Exploring repository",
-                reason: "Planning changes",
+                recall: "Recalling memory",
+                reason: "Working on the task",
+                stabilize: "Verifying changes",
+                commit: "Saving to memory",
                 validate: "Running verification",
               }
-              
+
               const currentPhaseKey = data.phase
-              const allKeys = ["observe", "reason", "validate"]
+              const allKeys = ["observe", "recall", "reason", "stabilize", "commit", "validate"]
 
               updateSteps(currentSteps.map((step) => (
                 (allKeys.includes(step.id) || step.id.startsWith("phase-")) && step.status === "running"
@@ -659,7 +746,7 @@ export function ChatShell() {
                   : step
               )))
               appendStep({ id: currentPhaseKey, name: phaseNames[currentPhaseKey] || currentPhaseKey, status: "running", description: data.message || "Working" })
-              setAgentState((prev) => ({ ...prev, status: currentPhaseKey === "validate" ? "stabilizing" : "running", phase: currentPhaseKey, message: phaseNames[currentPhaseKey] || "Working", updatedAt: new Date().toISOString(), runtimeMs: startedAtRef.current ? Date.now() - startedAtRef.current : prev.runtimeMs }))
+              setAgentState((prev) => ({ ...prev, status: (currentPhaseKey === "validate" || currentPhaseKey === "stabilize" || currentPhaseKey === "commit") ? "stabilizing" : "running", phase: currentPhaseKey, message: phaseNames[currentPhaseKey] || "Working", updatedAt: new Date().toISOString(), runtimeMs: startedAtRef.current ? Date.now() - startedAtRef.current : prev.runtimeMs }))
               setPhaseStatus(currentPhaseKey, "running", data.message || "Working")
               appendToolActivity({ name: phaseNames[currentPhaseKey] || currentPhaseKey, status: "running", message: data.message || "Phase transition" })
               setTerminalLines(prev => [...prev, `➔ Transitioned to phase: ${data.phase.toUpperCase()}`])
@@ -760,9 +847,16 @@ export function ChatShell() {
               const fileStats = new Map<string, { additions: number; deletions: number }>()
               let currentFile = ""
               for (const line of diffText.split("\n")) {
+                // New-file boundary: git format ("diff --git a/x b/x") or plain
+                // unified-diff format ("+++ b/x" from the backend's unified_diff).
                 if (line.startsWith("diff --git ")) {
                   currentFile = line.split(" b/")[1] || line.split(" a/")[1] || ""
                   if (currentFile) fileStats.set(currentFile, { additions: 0, deletions: 0 })
+                } else if (line.startsWith("+++ ")) {
+                  currentFile = line.replace(/^\+\+\+ (b\/)?/, "").trim()
+                  if (currentFile && currentFile !== "/dev/null" && !fileStats.has(currentFile)) {
+                    fileStats.set(currentFile, { additions: 0, deletions: 0 })
+                  }
                 } else if (currentFile && line.startsWith("+") && !line.startsWith("+++")) {
                   fileStats.get(currentFile)!.additions += 1
                 } else if (currentFile && line.startsWith("-") && !line.startsWith("---")) {
@@ -771,30 +865,42 @@ export function ChatShell() {
               }
               setLastDiffContent(diffText)
 
-              // Parse and store diff for each file
+              // Parse and store diff for each file. Handles git format
+              // ("diff --git a/x b/x") and plain unified diff ("--- a/x" then
+              // "+++ b/x"), which is what the backend's unified_diff emits.
               const newFileDiffs = new Map<string, string>()
               const lines = diffText.split("\n")
               let currentFileName = ""
               let currentFileDiff: string[] = []
 
+              const flushFile = () => {
+                if (currentFileName && currentFileDiff.length > 0) {
+                  newFileDiffs.set(currentFileName, currentFileDiff.join("\n"))
+                }
+              }
+
               for (const line of lines) {
                 if (line.startsWith("diff --git")) {
-                  // Save previous file's diff
-                  if (currentFileName && currentFileDiff.length > 0) {
-                    newFileDiffs.set(currentFileName, currentFileDiff.join("\n"))
-                  }
-                  // Start new file
+                  flushFile()
                   const match = line.match(/diff --git a\/(.+?) b\/(.+)/)
                   currentFileName = match ? match[2] : ""
                   currentFileDiff = [line]
-                } else if (currentFileName) {
+                } else if (line.startsWith("--- ")) {
+                  // Start of a new file in plain unified-diff format.
+                  flushFile()
+                  currentFileName = ""
+                  currentFileDiff = [line]
+                } else if (line.startsWith("+++ ")) {
+                  // Filename for the plain unified-diff format.
+                  if (!currentFileName) {
+                    currentFileName = line.replace(/^\+\+\+ (b\/)?/, "").trim()
+                  }
+                  currentFileDiff.push(line)
+                } else if (currentFileDiff.length > 0) {
                   currentFileDiff.push(line)
                 }
               }
-              // Save last file
-              if (currentFileName && currentFileDiff.length > 0) {
-                newFileDiffs.set(currentFileName, currentFileDiff.join("\n"))
-              }
+              flushFile()
               setFileDiffs(newFileDiffs)
 
               if (planMode === "autonomous") {
@@ -815,7 +921,11 @@ export function ChatShell() {
               if (planMode !== "autonomous") {
                 setActiveDiffFile("agent-patch.diff")
               }
-              
+              // Surface the diff in the Agent Computer live pane (both modes)
+              setAgentComputerView("diff")
+              setAgentComputerOpen(true)
+              setAgentAction(`Patch · +${additions}/-${deletions}`)
+
             } else if (data.type === "test_result") {
               const passed = data.success === true
               setTestStatus({ status: passed ? "passed" : "failed", command: data.command, message: data.message, passed: parseNumber(data.passed), failed: parseNumber(data.failed), durationMs: parseNumber(data.duration_ms ?? data.durationMs) })
@@ -880,6 +990,11 @@ export function ChatShell() {
                 scan_workspace: "Scan workspace",
                 read_file: "Read",
                 write_file: "Edited",
+                str_replace: "Edited",
+                list_files: "List files",
+                search_files: "Search",
+                run_command: "Terminal",
+                attempt_completion: "Completed",
                 analyze_dependencies: "Analyze dependencies",
                 memory_recall: "Memory recall",
                 memory_store: "Memory store",
@@ -906,6 +1021,8 @@ export function ChatShell() {
                 name: stepName,
                 status: data.status === "error" ? "error" : data.status === "running" ? "running" : "done",
                 description: stepDetail,
+                args: data.args && Object.keys(data.args).length > 0 ? data.args : undefined,
+                result: data.result || "",
               })
               appendToolActivity({
                 id: stepId,
@@ -915,6 +1032,55 @@ export function ChatShell() {
                 target: target,
               })
               setTerminalLines(prev => [...prev, `[${label.toUpperCase()}] ${target} ${detail}`])
+
+              // --- Drive the Agent Computer live pane ---
+              setAgentAction(`${label}${target ? ` ${target}` : ""}`.trim())
+              const args = (data.args || {}) as Record<string, unknown>
+              if (data.tool === "write_file" || data.tool === "str_replace") {
+                const content = typeof args.content === "string"
+                  ? args.content
+                  : typeof args.new_string === "string"
+                    ? args.new_string
+                    : (data.result || "")
+                if (target) {
+                  setAgentFiles(prev => {
+                    const next = new Map(prev)
+                    next.set(target, {
+                      path: target,
+                      content,
+                      isWriting: data.status === "running",
+                      action: data.tool === "str_replace" ? "edited" : "wrote",
+                      linesChanged: linesChanged || content.split("\n").length,
+                    })
+                    return next
+                  })
+                  setAgentActiveFile(target)
+                  setAgentComputerView("editor")
+                  setAgentComputerOpen(true)
+                }
+              } else if (data.tool === "read_file" && target) {
+                const content = typeof data.result === "string" ? data.result : ""
+                setAgentFiles(prev => {
+                  const next = new Map(prev)
+                  const existing = next.get(target)
+                  // Don't clobber a written file with a read view
+                  if (!existing || existing.action === "read") {
+                    next.set(target, { path: target, content, isWriting: false, action: "read", linesChanged: content.split("\n").length })
+                  }
+                  return next
+                })
+                setAgentActiveFile(target)
+                setAgentComputerView("editor")
+                setAgentComputerOpen(true)
+              } else if (data.tool === "run_command" || data.tool === "terminal" || data.tool === "run_tests") {
+                const cmd = typeof args.command === "string" ? args.command : target
+                if (cmd) setTerminalLines(prev => [...prev, `$ ${cmd}`])
+                if (typeof data.result === "string" && data.result) {
+                  setTerminalLines(prev => [...prev, ...data.result.split("\n").slice(0, 50)])
+                }
+                setAgentComputerView("terminal")
+                setAgentComputerOpen(true)
+              }
 
             } else if (data.type === "context_status") {
               setContextStatus({
@@ -1069,39 +1235,6 @@ export function ChatShell() {
   }, [appendToolActivity])
 
   // Extract diff for specific file from full diff
-  const getFileDiff = useCallback((filename: string, fullDiff: string): string => {
-    if (!fullDiff) return ""
-
-    const lines = fullDiff.split("\n")
-    const fileDiffLines: string[] = []
-    let inTargetFile = false
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
-
-      // Check if this is the start of our target file
-      if (line.startsWith("diff --git") && line.includes(filename)) {
-        inTargetFile = true
-        fileDiffLines.push(line)
-        continue
-      }
-
-      // Check if we've moved to a different file
-      if (line.startsWith("diff --git") && !line.includes(filename)) {
-        if (inTargetFile) break // We've collected all lines for our file
-        inTargetFile = false
-        continue
-      }
-
-      // Collect lines while we're in the target file
-      if (inTargetFile) {
-        fileDiffLines.push(line)
-      }
-    }
-
-    return fileDiffLines.join("\n")
-  }, [])
-
   const clearChat = useCallback(() => {
     setMessages([])
     setError(null)
@@ -1132,12 +1265,12 @@ export function ChatShell() {
         
         {/* Main Chat Area - Center */}
         <div className={cn("flex-1 flex flex-col relative min-w-0 transition-all duration-300 bg-white", activeDiffFile ? "max-w-[50%]" : "max-w-full")}>
-          <div className="flex h-12 shrink-0 items-center justify-between px-5 text-[13px]">
+          <div className="relative z-[9999] flex h-12 shrink-0 items-center justify-between px-5 text-[13px] bg-white">
             <div className="flex min-w-0 items-center gap-3">
               <span className="truncate font-normal text-stone-900">{workspacePath}</span>
               <span className="hidden rounded-full bg-stone-50 px-2 py-1 text-[12px] text-stone-500 sm:inline-flex">agent workspace</span>
             </div>
-            <div className="flex items-center gap-1.5 text-stone-500">
+            <div className="relative z-[9999] flex items-center gap-1.5 text-stone-500">
               <Button
                 onClick={clearChat}
                 variant="ghost"
@@ -1147,6 +1280,9 @@ export function ChatShell() {
               >
                 <MessageSquareDashed className="w-4 h-4" />
               </Button>
+              <button onClick={() => setAgentComputerOpen(!agentComputerOpen)} className={cn("rounded-lg p-2 transition-colors hover:bg-stone-100", agentComputerOpen && "bg-stone-100 text-stone-900")} aria-label="Toggle agent computer" title="Agent's Computer">
+                <Cpu size={16} strokeWidth={1.6} />
+              </button>
               <button onClick={() => setRightSidebarOpen(!rightSidebarOpen)} className="rounded-lg p-2 transition-colors hover:bg-stone-100" aria-label="Toggle right panel">
                 <PanelRight size={16} strokeWidth={1.6} />
               </button>
@@ -1244,7 +1380,7 @@ export function ChatShell() {
           <div className="w-1/2 border-l border-stone-100/30 bg-white flex flex-col overflow-hidden animate-in slide-in-from-right duration-300">
             <DiffViewer
               filename={activeDiffFile}
-              diffContent={fileDiffs.get(activeDiffFile) || getFileDiff(activeDiffFile, lastDiffContent)}
+              diffContent={fileDiffs.get(activeDiffFile) || lastDiffContent}
               onClose={() => setActiveDiffFile(null)}
               onAccept={() => {
                 setDiffStatus((prev) => ({ ...prev, status: "accepted" }))
@@ -1255,9 +1391,25 @@ export function ChatShell() {
         )}
       </div>
 
+      {/* Agent Computer — Devin-style live pane (separate right bar) */}
+      <AgentComputer
+        isOpen={agentComputerOpen}
+        onClose={() => setAgentComputerOpen(false)}
+        view={agentComputerView}
+        setView={setAgentComputerView}
+        files={agentFiles}
+        activeFile={agentActiveFile}
+        onSelectFile={setAgentActiveFile}
+        terminalLines={terminalLines}
+        diffContent={lastDiffContent}
+        fileDiffs={fileDiffs}
+        isAgentActive={isStreaming || agentState.status === "running" || agentState.status === "thinking"}
+        currentAction={agentAction}
+      />
+
       {/* Right Sidebar with Terminal/Logs/Info */}
-      <RightSidebar 
-        isOpen={rightSidebarOpen} 
+      <RightSidebar
+        isOpen={rightSidebarOpen}
         onToggle={() => setRightSidebarOpen(!rightSidebarOpen)} 
         terminalLines={terminalLines}
         isRunningTask={isRunningTask}

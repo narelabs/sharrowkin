@@ -1,1 +1,1 @@
-"""Sharrowkin test suite."""
+"""Test suite for Sharrowkin autonomous agent."""

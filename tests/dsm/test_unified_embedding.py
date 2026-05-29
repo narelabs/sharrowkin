@@ -7,7 +7,7 @@ from memory.common.embedding import (
     SentenceTransformerEmbeddingModel,
     EmbeddingAdapter
 )
-from dsm.embedding import HashEmbeddingModel
+from memory.dsm.indexing.embedding import HashEmbeddingModel
 
 
 def test_unified_hash_embedding_shape_and_type():

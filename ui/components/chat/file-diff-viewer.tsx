@@ -72,7 +72,7 @@ export function FileDiffViewer({ filename, oldContent = "", newContent, classNam
   const diffLines = useMemo(() => {
     if (!oldContent) {
       // New file - all lines are added
-      return newContent.split("\n").map((line, index) => ({
+      return newContent.split("\n").map((line, index): DiffLine => ({
         type: "added" as const,
         content: line,
         newLineNumber: index + 1

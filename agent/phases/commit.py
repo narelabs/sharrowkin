@@ -27,9 +27,21 @@ class CommitModule:
         changed_files: list[str],
         success: bool,
         utility: float = 0.7,
+        conversation_summary: str = None,
         ui_delays_enabled: bool = False
     ) -> dict[str, Any]:
         """Commit successful execution to memory.
+
+        Args:
+            memory: MemoryBridge instance
+            task: Task description
+            states: List of states
+            actions: List of actions taken
+            changed_files: List of changed files
+            success: Whether task succeeded
+            utility: Utility score
+            conversation_summary: Summary of conversation context
+            ui_delays_enabled: Enable UI delays
 
         Returns:
             Dictionary with commit status
@@ -40,15 +52,20 @@ class CommitModule:
         if not memory.enabled:
             return {"committed": False, "reason": "Memory disabled"}
 
-        # Write to DSM
+        # ✅ NEW: Enhanced DSM write with conversation context
         dsm_written = False
         if memory.dsm:
             try:
+                dsm_text = f"Task: {task}\nActions: {', '.join(actions[-3:])}"
+                if conversation_summary:
+                    dsm_text += f"\n\nConversation Context:\n{conversation_summary}"
+
                 memory.dsm.write(
-                    text=f"Task: {task}\nActions: {', '.join(actions[-3:])}",
+                    text=dsm_text,
                     description=f"Completed task: {task[:100]}",
                     category_path="agent/tasks",
                     importance=utility,
+                    metadata={"has_conversation_context": bool(conversation_summary)}
                 )
                 dsm_written = True
             except Exception as e:

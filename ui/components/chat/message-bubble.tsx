@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
+import { motion, AnimatePresence } from "framer-motion"
 import { cn } from "@/lib/utils"
 import type { Message, ToolStep, TaskPlan } from "./chat-shell"
 import { Loader2, CheckCircle2, ChevronRight, ChevronDown, CircleDashed, FileCode, XCircle, ListTodo, Clock, Bug, AlertCircle, Lightbulb, Bot, Search, Wrench, FlaskConical, Brain } from "lucide-react"
@@ -150,54 +151,146 @@ function formatStepDisplay(step: ToolStep): { verb: string; target: string | nul
   return { verb: name, target: null, detail: desc || null, isCode: false }
 }
 
+function formatToolArgs(args?: Record<string, unknown>): string {
+  if (!args || Object.keys(args).length === 0) return ""
+  try {
+    return JSON.stringify(args, null, 2)
+  } catch {
+    return String(args)
+  }
+}
+
 function AgentTimelineRow({ step, index, onOpenDiff }: { step: ToolStep; index: number, onOpenDiff?: (filename: string) => void }) {
+  const [expanded, setExpanded] = useState(false)
   const isRunning = step.status === "running"
+  const isError = step.status === "error"
   const kind = getActivityKind(step)
   const KindIcon = getKindIcon(kind)
   const isFilePatch = step.id.startsWith("patch-") || step.name.toLowerCase().includes("patch") || step.name === "Prepared code changes"
   const display = formatStepDisplay(step)
 
+  const argsText = formatToolArgs(step.args)
+  const resultText = (step.result || "").trim()
+  const hasDetails = Boolean(argsText || resultText)
+  const canExpand = hasDetails && !isFilePatch
+
+  const handleClick = () => {
+    if (isFilePatch && onOpenDiff) {
+      onOpenDiff("agent-patch.diff")
+    } else if (canExpand) {
+      setExpanded((v) => !v)
+    }
+  }
+
   return (
-    <div
+    <motion.div
+      layout="position"
+      initial={{ opacity: 0, x: -6 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ type: "spring", stiffness: 380, damping: 30, mass: 0.6 }}
       className={cn(
-        "relative flex items-center gap-2.5 py-[5px] group transition-all duration-150",
-        isFilePatch && onOpenDiff && "cursor-pointer hover:bg-stone-50/50 rounded-lg px-2 -mx-2"
+        "relative rounded-lg px-2 -mx-2 transition-colors duration-300",
+        isRunning && "bg-gradient-to-r from-stone-50/80 to-transparent",
+        (isFilePatch && onOpenDiff) || canExpand ? "cursor-pointer hover:bg-stone-50/50" : ""
       )}
-      onClick={() => { if (isFilePatch && onOpenDiff) onOpenDiff("agent-patch.diff") }}
     >
-      <div className="flex h-4 w-4 shrink-0 items-center justify-center">
-        {isRunning ? (
-          <KindIcon strokeWidth={1.8} className="h-3.5 w-3.5 animate-pulse text-stone-500" />
-        ) : step.status === "error" ? (
-          <XCircle strokeWidth={1.5} className="h-3.5 w-3.5 text-red-500/80" />
-        ) : (
-          <KindIcon strokeWidth={1.5} className="h-3.5 w-3.5 text-stone-300" />
-        )}
-      </div>
-      <div className="min-w-0 flex-1 flex items-center gap-1.5 text-[13px] leading-5">
-        <span className={cn(
-          "shrink-0 transition-colors",
-          step.status === "error" ? "text-red-600 font-medium" : isRunning ? "text-stone-700 font-medium" : "text-stone-500"
-        )}>
-          {display.verb}
-        </span>
-        {display.target && (
-          <code className={cn(
-            "inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11.5px] font-mono leading-5 truncate max-w-[280px]",
-            "bg-stone-100/70 text-stone-600"
+      <div className="flex items-center gap-2.5 py-[5px] group" onClick={handleClick}>
+        <div className="relative flex h-4 w-4 shrink-0 items-center justify-center overflow-visible">
+          {/* Soft halo behind the icon while the tool is active */}
+          {isRunning && (
+            <motion.span
+              aria-hidden
+              className="pointer-events-none absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-stone-400/20 blur-[3px]"
+              animate={{ scale: [1, 1.3, 1], opacity: [0.45, 0.12, 0.45] }}
+              transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+            />
+          )}
+          {isRunning ? (
+            <motion.span
+              animate={{ scale: [1, 1.08, 1] }}
+              transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+              className="relative flex items-center justify-center"
+            >
+              <KindIcon strokeWidth={2} className="h-3.5 w-3.5 text-stone-600" />
+            </motion.span>
+          ) : isError ? (
+            <motion.span initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring", stiffness: 500, damping: 22 }} className="flex items-center justify-center">
+              <XCircle strokeWidth={1.5} className="h-3.5 w-3.5 text-red-500/80" />
+            </motion.span>
+          ) : (
+            <motion.span initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring", stiffness: 500, damping: 22 }} className="flex items-center justify-center">
+              <KindIcon strokeWidth={1.5} className="h-3.5 w-3.5 text-stone-300" />
+            </motion.span>
+          )}
+        </div>
+        <div className="min-w-0 flex-1 flex items-center gap-1.5 text-[13px] leading-5">
+          <span className={cn(
+            "shrink-0 transition-colors duration-300",
+            isError ? "text-red-600 font-medium" : isRunning ? "text-stone-700 font-medium" : "text-stone-500"
           )}>
-            {display.isCode && <FileCode size={11} className="text-stone-400 shrink-0" />}
-            {display.target}
-          </code>
+            {display.verb}
+          </span>
+          {display.target && (
+            <code className={cn(
+              "inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11.5px] font-mono leading-5 truncate max-w-[280px] transition-colors duration-300",
+              isRunning ? "bg-stone-200/70 text-stone-700" : "bg-stone-100/70 text-stone-600"
+            )}>
+              {display.isCode && <FileCode size={11} className="text-stone-400 shrink-0" />}
+              {display.target}
+            </code>
+          )}
+          {display.detail && !display.target && (
+            <span className="text-stone-400 truncate">{display.detail}</span>
+          )}
+        </div>
+        {canExpand && (
+          <motion.span animate={{ rotate: expanded ? 90 : 0 }} transition={{ duration: 0.18 }} className="shrink-0 text-stone-300 group-hover:text-stone-400">
+            <ChevronRight size={13} strokeWidth={1.6} />
+          </motion.span>
         )}
-        {display.detail && !display.target && (
-          <span className="text-stone-400 truncate">{display.detail}</span>
-        )}
+        <span className={cn(
+          "shrink-0 text-[11px] tabular-nums text-stone-400 transition-opacity duration-300",
+          isRunning ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        )}>{getStepDuration(index, isRunning)}</span>
       </div>
-      <span className={cn(
-        "shrink-0 text-[11px] tabular-nums text-stone-400 transition-opacity",
-        isRunning ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-      )}>{getStepDuration(index, isRunning)}</span>
+
+      <AnimatePresence initial={false}>
+        {expanded && canExpand && (
+          <motion.div
+            key="tool-details"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="ml-[26px] mb-2 mt-0.5 space-y-2">
+              {argsText && (
+                <ToolDetailBlock label="Arguments" body={argsText} />
+              )}
+              {resultText && (
+                <ToolDetailBlock label="Response" body={resultText} tone={isError ? "error" : "default"} />
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  )
+}
+
+function ToolDetailBlock({ label, body, tone = "default" }: { label: string; body: string; tone?: "default" | "error" }) {
+  return (
+    <div className="rounded-lg border border-stone-200/70 bg-stone-50/60 overflow-hidden">
+      <div className="px-2.5 py-1 text-[10px] font-medium uppercase tracking-widest text-stone-400 border-b border-stone-200/60 bg-stone-100/40">
+        {label}
+      </div>
+      <pre className={cn(
+        "px-2.5 py-2 text-[11.5px] font-mono leading-relaxed whitespace-pre-wrap break-words max-h-64 overflow-y-auto",
+        tone === "error" ? "text-red-600/90" : "text-stone-600"
+      )}>
+        {body}
+      </pre>
     </div>
   )
 }
@@ -288,13 +381,24 @@ function TaskPlanItem({ task, depth = 0 }: { task: TaskPlan; depth?: number }) {
 }
 
 function ThoughtSection({ lines, isStreaming }: { lines: string[]; isStreaming: boolean }) {
-  const [expanded, setExpanded] = useState(false)
-  const preview = lines[0]?.slice(0, 120) || "Reasoning..."
-  
+  const [userToggled, setUserToggled] = useState(false)
+  const [manualExpanded, setManualExpanded] = useState(false)
+  // Auto-expand while the agent is actively thinking so reasoning is visible
+  // live; once streaming ends, collapse unless the user pinned it open.
+  const expanded = userToggled ? manualExpanded : isStreaming
+  const preview = lines[lines.length - 1]?.slice(0, 120) || "Reasoning..."
+
+  const bodyRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (expanded && isStreaming && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight
+    }
+  }, [lines.length, expanded, isStreaming])
+
   return (
     <div className="py-[2px]">
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => { setManualExpanded(!expanded); setUserToggled(true) }}
         className="flex items-center gap-1.5 text-[13px] leading-5 transition-colors hover:text-stone-600 group py-[3px]"
       >
         <Brain size={14} strokeWidth={1.5} className={cn("text-stone-400 shrink-0", isStreaming && "animate-pulse")} />
@@ -304,7 +408,7 @@ function ThoughtSection({ lines, isStreaming }: { lines: string[]; isStreaming: 
         </span>
       </button>
       {expanded && (
-        <div className="ml-3 pl-4 border-l border-stone-100/60 py-2 text-[13px] text-stone-500 leading-6 max-h-[300px] overflow-y-auto no-scrollbar">
+        <div ref={bodyRef} className="ml-3 pl-4 border-l border-stone-100/60 py-2 text-[13px] text-stone-500 leading-6 max-h-[300px] overflow-y-auto no-scrollbar">
           {lines.map((line, i) => (
             <div key={i} className="animate-in fade-in duration-200" style={{ animationDelay: `${i * 30}ms` }}>
               {line}
@@ -407,12 +511,18 @@ export function MessageBubble({ message, isStreaming = false, onOpenDiff }: Mess
                   className="flex items-center gap-1.5 text-[13px] leading-5 transition-colors hover:text-stone-600 group py-[3px]"
                 >
                   {expandedSteps ? <ChevronDown size={13} strokeWidth={1.5} className="text-stone-400" /> : <ChevronRight size={13} strokeWidth={1.5} className="text-stone-400" />}
-                  <span className={cn(
-                    "transition-colors",
-                    (isStreaming || isWorking) ? "text-stone-700 font-medium" : "text-stone-400"
-                  )}>
-                    {isStreaming || isWorking ? "Working" : "Worked"} for {elapsed}
-                  </span>
+                  {(isStreaming || isWorking) ? (
+                    <span
+                      className="shrink-0 font-medium bg-clip-text text-transparent animate-shimmer-text"
+                      style={{ backgroundImage: "linear-gradient(90deg, #78716c 0%, #d6d3d1 50%, #78716c 100%)", animationDuration: "2.4s" }}
+                    >
+                      Working for {elapsed}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 transition-colors text-stone-400">
+                      Worked for {elapsed}
+                    </span>
+                  )}
                   {steps.length > 0 && <span className="text-stone-400 text-[12px]">· {steps.length} {steps.length === 1 ? "action" : "actions"}</span>}
                   {activitySummary.length > 0 && <span className="text-stone-400 text-[12px]">· {activitySummary.slice(0, 3).join(", ")}</span>}
                 </button>
@@ -467,7 +577,7 @@ export function MessageBubble({ message, isStreaming = false, onOpenDiff }: Mess
           </div>
 
           {visibleContent && (
-            <div className="text-[14px] text-stone-900 font-normal leading-7 tracking-[-0.01em] max-w-full overflow-x-auto animate-in fade-in duration-300">
+            <div className="text-[14px] text-stone-900 font-normal leading-7 tracking-[-0.01em] max-w-full overflow-x-auto">
               <MarkdownRenderer content={visibleContent} isStreaming={isStreaming} />
             </div>
           )}

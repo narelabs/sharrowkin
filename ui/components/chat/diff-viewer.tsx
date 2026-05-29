@@ -1,19 +1,18 @@
 "use client"
 
 import { useState } from "react"
-import { X, Check, Columns, Rows, FileCode, CheckCircle2 } from "lucide-react"
+import { X, Columns, Rows, FileCode } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface DiffViewerProps {
   filename: string
   diffContent?: string
   onClose: () => void
-  onAccept: () => void
+  onAccept?: () => void
 }
 
-export function DiffViewer({ filename, diffContent, onClose, onAccept }: DiffViewerProps) {
+export function DiffViewer({ filename, diffContent, onClose }: DiffViewerProps) {
   const [viewMode, setViewMode] = useState<"split" | "unified">("unified")
-  const [hasAccepted, setHasAccepted] = useState(false)
 
   // Parse real unified diff into lines with metadata
   const parsedLines = (diffContent || "").split("\n").map((line) => {
@@ -35,13 +34,6 @@ export function DiffViewer({ filename, diffContent, onClose, onAccept }: DiffVie
   const additions = parsedLines.filter(l => l.type === "add").length
   const deletions = parsedLines.filter(l => l.type === "del").length
 
-  const handleAcceptClick = () => {
-    setHasAccepted(true)
-    setTimeout(() => {
-      onAccept()
-    }, 1000)
-  }
-
   return (
     <div className="h-full flex flex-col bg-white">
       {/* Diff Header */}
@@ -52,7 +44,7 @@ export function DiffViewer({ filename, diffContent, onClose, onAccept }: DiffVie
           <span className="text-[10px] text-emerald-600 font-mono bg-emerald-50 px-1.5 py-0.5 rounded-md">+{additions}</span>
           <span className="text-[10px] text-rose-600 font-mono bg-rose-50 px-1.5 py-0.5 rounded-md">-{deletions}</span>
         </div>
-        
+
         <div className="flex items-center gap-4">
           <div className="flex bg-stone-100 p-0.5 rounded-lg shrink-0">
             <button
@@ -87,15 +79,7 @@ export function DiffViewer({ filename, diffContent, onClose, onAccept }: DiffVie
 
       {/* Code diff container */}
       <div className="flex-1 overflow-y-auto p-6 bg-stone-50/40 no-scrollbar">
-        {hasAccepted ? (
-          <div className="h-full flex flex-col items-center justify-center text-center p-8 animate-in fade-in duration-300">
-            <div className="w-12 h-12 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-4 text-emerald-500">
-              <CheckCircle2 size={24} strokeWidth={1.5} />
-            </div>
-            <h3 className="text-[15px] font-medium text-stone-800">Changes Accepted</h3>
-            <p className="text-[13px] text-stone-400 font-normal mt-1">Patch applied to workspace.</p>
-          </div>
-        ) : !diffContent ? (
+        {!diffContent ? (
           <div className="h-full flex flex-col items-center justify-center text-center text-stone-300 p-8">
             <FileCode size={32} strokeWidth={1} className="mb-3" />
             <span className="text-[13px]">No diff content available yet.</span>
@@ -124,28 +108,6 @@ export function DiffViewer({ filename, diffContent, onClose, onAccept }: DiffVie
           </div>
         )}
       </div>
-
-      {/* Action Bar */}
-      {!hasAccepted && diffContent && (
-        <div className="h-16 border-t border-stone-100/40 px-6 flex items-center justify-between bg-white shrink-0">
-          <span className="text-[12px] text-stone-400">{additions} additions, {deletions} deletions</span>
-          <div className="flex gap-2">
-            <button
-              onClick={onClose}
-              className="px-3.5 py-1.5 border border-stone-200/40 text-stone-500 rounded-lg hover:bg-stone-50 transition-colors text-[12.5px] font-normal"
-            >
-              Reject
-            </button>
-            <button
-              onClick={handleAcceptClick}
-              className="flex items-center gap-1 px-4 py-1.5 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-[12.5px] font-normal transition-colors shadow-sm"
-            >
-              <Check size={14} className="mr-0.5" />
-              <span>Accept Changes</span>
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

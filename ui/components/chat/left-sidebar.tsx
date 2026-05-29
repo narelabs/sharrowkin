@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { BookOpen, Bot, ChevronDown, CircleHelp, GitPullRequest, LayoutPanelLeft, Menu, MessageCircleQuestion, Plus, Settings, Workflow, X } from "lucide-react"
+import { BookOpen, Bot, ChevronDown, GitPullRequest, LayoutPanelLeft, Menu, Plus, Search, Settings, Workflow, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getAgentName } from "@/lib/persona-api"
 
@@ -119,22 +119,23 @@ export function LeftSidebar({ isOpen, onToggle }: LeftSidebarProps) {
 
           <nav className="px-2.5 py-2">
             <div className="space-y-0.5">
-              {NAV_ITEMS.map(({ icon: Icon, label, href, badge }) => {
-                const active = label === "Sessions" ? pathname?.startsWith("/chat") : pathname?.startsWith(href) && href !== "/chat"
+              {NAV_ITEMS.map(({ icon: Icon, label, href }) => {
+                const active = href === "/chat"
+                  ? pathname?.startsWith("/chat")
+                  : pathname?.startsWith(href)
                 return (
                   <Link
                     key={label}
                     href={href === "/chat" ? `/chat?session=${activeSessionId}` : href}
                     className={cn(
                       "group flex h-8 items-center gap-2.5 rounded-md px-2 text-[13px] font-normal transition-colors",
-                      active && label === "Sessions"
-                        ? "text-stone-950"
+                      active
+                        ? "bg-stone-200/60 text-stone-950"
                         : "text-stone-500 hover:bg-stone-200/45 hover:text-stone-950",
                     )}
                   >
-                    <Icon size={15} strokeWidth={1.65} className={active && label === "Sessions" ? "text-stone-900" : "text-stone-500"} />
+                    <Icon size={15} strokeWidth={1.65} className={active ? "text-stone-900" : "text-stone-500"} />
                     <span className="flex-1">{label}</span>
-                    {badge && <span className="rounded-md bg-stone-200/70 px-1.5 py-0.5 text-[11px] text-stone-500">{badge}</span>}
                   </Link>
                 )
               })}
@@ -143,12 +144,13 @@ export function LeftSidebar({ isOpen, onToggle }: LeftSidebarProps) {
 
           <div className="mt-3 flex-1 overflow-y-auto px-2.5 no-scrollbar">
             <div className="mb-2 flex items-center justify-between px-2">
-              <button onClick={() => setRecentOpen((value) => !value)} className="text-[12px] font-normal text-stone-500 transition-colors hover:text-stone-800">
+              <button onClick={() => setRecentOpen((value) => !value)} className="flex items-center gap-1 text-[12px] font-normal text-stone-500 transition-colors hover:text-stone-800">
+                <ChevronDown size={13} strokeWidth={1.7} className={cn("text-stone-400 transition-transform duration-200", recentOpen ? "" : "-rotate-90")} />
                 Recent
               </button>
               <div className="flex items-center gap-1 text-stone-400">
                 <button onClick={() => setSessionSearchOpen((value) => !value)} className="rounded p-1 transition-colors hover:bg-stone-200/50 hover:text-stone-700" aria-label="Search sessions">
-                  <CircleHelp size={14} strokeWidth={1.6} />
+                  <Search size={14} strokeWidth={1.6} />
                 </button>
                 <button onClick={handleNewChat} className="rounded p-1 transition-colors hover:bg-stone-200/50 hover:text-stone-700" aria-label="New session">
                   <Plus size={15} strokeWidth={1.6} />

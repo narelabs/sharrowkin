@@ -1,10 +1,4 @@
-import sys
-import os
-
-# Добавляем путь к модулям, чтобы Python их видел
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-
-from rld.models import ReasoningTrajectory, ReasoningGene, GeneStats, now_ts
+from memory.rld.models import ReasoningTrajectory, ReasoningGene, GeneStats, now_ts
 
 def test_rld_foundations():
     print("RLD foundation models test...")

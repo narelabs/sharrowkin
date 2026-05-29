@@ -1,71 +1,174 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+/**
+ * ConnectionStatus — subscribes to `selectConnection` from the AgentSessionStore.
+ *
+ * Shows:
+ * - "Connected" (green, auto-hides after 3s)
+ * - "Reconnecting (attempt N)" (amber)
+ * - "Offline" (red + Reconnect button)
+ *
+ * NO polling `/api/health` — connection state comes from the store/socket client.
+ *
+ * Requirements: 3.2, 3.5
+ * Validates: Requirements 3.2
+ */
+
+import { useSyncExternalStore, useEffect, useRef, useState } from "react"
 import { Wifi, WifiOff, Loader2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { Surface } from "@/components/visual/surface"
+import { selectConnection, type AgentSessionStore } from "@/lib/agent-stream"
+import type { AgentSocketClient } from "@/lib/agent-stream"
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000"
+// =============================================================================
+// Component
+// =============================================================================
 
-type ConnectionState = "connected" | "disconnected" | "reconnecting"
+export interface ConnectionStatusProps {
+  store?: AgentSessionStore
+  socketClient?: AgentSocketClient | null
+}
 
-export function ConnectionStatus() {
-  const [state, setState] = useState<ConnectionState>("connected")
-  const [visible, setVisible] = useState(false)
+export function ConnectionStatus({ store, socketClient }: ConnectionStatusProps) {
+  // If no store provided (legacy call from providers.tsx), render nothing.
+  // This avoids the hook-call-on-undefined crash while the migration to
+  // store-driven rendering is in progress.
+  if (!store) {
+    return null
+  }
+
+  return <ConnectionStatusInner store={store} socketClient={socketClient} />
+}
+
+function ConnectionStatusInner({ store, socketClient }: { store: AgentSessionStore; socketClient?: AgentSocketClient | null }) {
+  const { connection, reconnectAttempt } = useSyncExternalStore(
+    store.subscribe,
+    () => selectConnection(store.getState()),
+    () => selectConnection(store.getState())
+  )
+
+  // Auto-hide "connected" after 3s
+  const [showConnected, setShowConnected] = useState(false)
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const prevConnectionRef = useRef(connection)
 
   useEffect(() => {
-    let retryCount = 0
-    const maxRetries = 5
+    // Detect transition to "online" from another state
+    if (connection === "online" && prevConnectionRef.current !== "online") {
+      setShowConnected(true)
+      if (hideTimerRef.current) {
+        clearTimeout(hideTimerRef.current)
+      }
+      hideTimerRef.current = setTimeout(() => {
+        setShowConnected(false)
+        hideTimerRef.current = null
+      }, 3000)
+    }
 
-    const checkHealth = async () => {
-      try {
-        const res = await fetch(`${BACKEND_URL}/api/health`, { signal: AbortSignal.timeout(5000) })
-        if (res.ok) {
-          if (state !== "connected") {
-            setState("connected")
-            setVisible(true)
-            setTimeout(() => setVisible(false), 3000)
-          } else {
-            setVisible(false)
-          }
-          retryCount = 0
-        } else {
-          throw new Error("not ok")
-        }
-      } catch {
-        if (retryCount < maxRetries) {
-          setState("reconnecting")
-          retryCount++
-        } else {
-          setState("disconnected")
-        }
-        setVisible(true)
+    if (connection !== "online") {
+      setShowConnected(false)
+      if (hideTimerRef.current) {
+        clearTimeout(hideTimerRef.current)
+        hideTimerRef.current = null
       }
     }
 
-    checkHealth()
-    const timer = setInterval(checkHealth, 10000)
-    return () => clearInterval(timer)
-  }, [state])
+    prevConnectionRef.current = connection
 
-  if (!visible) return null
+    return () => {
+      if (hideTimerRef.current) {
+        clearTimeout(hideTimerRef.current)
+      }
+    }
+  }, [connection])
+
+  // Don't render anything when connected and auto-hide has elapsed
+  if (connection === "online" && !showConnected) {
+    return null
+  }
+
+  const handleReconnect = () => {
+    if (socketClient) {
+      const state = store.getState()
+      if (state.sessionId) {
+        socketClient.resume(state.sessionId, state.lastSeq)
+      }
+    }
+  }
 
   return (
-    <div
-      className={cn(
-        "fixed bottom-4 left-1/2 -translate-x-1/2 z-[9990] flex items-center gap-2 px-4 py-2 rounded-full border shadow-lg text-[12px] font-medium transition-all duration-300 animate-in fade-in slide-in-from-bottom-2",
-        state === "connected" && "bg-emerald-50 border-emerald-200 text-emerald-700",
-        state === "disconnected" && "bg-red-50 border-red-200 text-red-700",
-        state === "reconnecting" && "bg-amber-50 border-amber-200 text-amber-700"
-      )}
+    <Surface
+      className="connection-status"
+      style={{
+        position: "fixed",
+        bottom: "var(--space-4, 16px)",
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 9990,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "var(--space-2, 8px)",
+        padding: "var(--space-2, 8px) var(--space-4, 16px)",
+        borderRadius: "var(--radius-full, 9999px)",
+        fontSize: "var(--text-xs, 12px)",
+        fontWeight: 500,
+        borderColor: connection === "online"
+          ? "var(--color-success)"
+          : connection === "reconnecting"
+            ? "var(--color-warning)"
+            : "var(--color-danger)",
+        transition: `all var(--motion-base, 200ms) var(--ease-standard, ease)`,
+      }}
+      data-connection={connection}
     >
-      {state === "connected" && <Wifi size={14} />}
-      {state === "disconnected" && <WifiOff size={14} />}
-      {state === "reconnecting" && <Loader2 size={14} className="animate-spin" />}
-      <span>
-        {state === "connected" && "Backend connected"}
-        {state === "disconnected" && "Backend offline"}
-        {state === "reconnecting" && "Reconnecting..."}
+      {/* Icon */}
+      {connection === "online" && (
+        <Wifi size={14} style={{ color: "var(--color-success)" }} />
+      )}
+      {connection === "reconnecting" && (
+        <Loader2 size={14} style={{ color: "var(--color-warning)" }} />
+      )}
+      {connection === "offline" && (
+        <WifiOff size={14} style={{ color: "var(--color-danger)" }} />
+      )}
+
+      {/* Label */}
+      <span
+        style={{
+          color: connection === "online"
+            ? "var(--color-success)"
+            : connection === "reconnecting"
+              ? "var(--color-warning)"
+              : "var(--color-danger)",
+        }}
+      >
+        {connection === "online" && "Connected"}
+        {connection === "reconnecting" && `Reconnecting (attempt ${reconnectAttempt})`}
+        {connection === "offline" && "Offline"}
       </span>
-    </div>
+
+      {/* Reconnect button for offline state */}
+      {connection === "offline" && socketClient && (
+        <button
+          onClick={handleReconnect}
+          style={{
+            marginLeft: "var(--space-2, 8px)",
+            padding: "var(--space-1, 4px) var(--space-3, 12px)",
+            borderRadius: "var(--radius-sm, 4px)",
+            backgroundColor: "var(--color-danger)",
+            color: "var(--color-bg)",
+            border: "none",
+            fontSize: "var(--text-xs, 12px)",
+            fontWeight: 600,
+            cursor: "pointer",
+            transition: `opacity var(--motion-fast, 120ms) var(--ease-standard, ease)`,
+          }}
+          onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "0.85" }}
+          onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "1" }}
+        >
+          Reconnect
+        </button>
+      )}
+    </Surface>
   )
 }

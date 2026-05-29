@@ -23,9 +23,17 @@ class RecallModule:
         memory: MemoryBridge,
         task: str,
         workspace_summary: str,
+        conversation_context: str = None,
         ui_delays_enabled: bool = False
     ) -> dict[str, Any]:
         """Retrieve memory context for the task.
+
+        Args:
+            memory: MemoryBridge instance
+            task: Current task
+            workspace_summary: Workspace summary
+            conversation_context: Recent conversation history
+            ui_delays_enabled: Enable UI delays
 
         Returns:
             Dictionary with:
@@ -41,10 +49,10 @@ class RecallModule:
                 "memory_context_structured": {},
             }
 
-        # Retrieve from all memory systems
-        context_data = memory.get_context(
+        # Retrieve from all memory systems with conversation context
+        context_data = memory.recall_structured(
             task=task,
-            workspace_summary=workspace_summary,
+            conversation_context=conversation_context
         )
 
         # Format as text

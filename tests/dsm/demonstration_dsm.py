@@ -2,10 +2,7 @@ import sys
 import time
 from pathlib import Path
 
-# Подключаем src
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
-from dsm.core import DynamicSegmentedMemory
+from memory.dsm.core.memory import DynamicSegmentedMemory
 
 def run_demo():
     # Создаем DSM с быстрой физикой для демо

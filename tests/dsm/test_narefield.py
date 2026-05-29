@@ -3,9 +3,9 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from dsm import DynamicSegmentedMemory
-from narefield import CognitiveInvariant, NAREField, NAREFieldAdapter, NAREFieldConfig
-from narefield.core.model import LayerStackModel
+from memory.dsm import DynamicSegmentedMemory
+from memory.narefield import CognitiveInvariant, NAREField, NAREFieldAdapter, NAREFieldConfig
+from memory.narefield.core.model import LayerStackModel
 
 
 def test_narefield_retrieves_dsm_attractor_and_injects_delta() -> None:

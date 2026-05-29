@@ -32,6 +32,28 @@ class CachedWorkspace:
     file_hashes: dict[str, str] = field(default_factory=dict)  # file_path -> hash
     ast_cache: dict[str, bytes] = field(default_factory=dict)  # file_path -> binary AST
 
+    # Size limits to prevent memory leaks
+    MAX_SEMANTIC_INSIGHTS_SIZE = 100_000  # 100KB
+    MAX_AST_CACHE_ENTRIES = 100  # Max 100 files cached
+    MAX_FILE_HASHES = 1000  # Max 1000 files tracked
+
+    def __post_init__(self):
+        """Enforce size limits after initialization."""
+        # Truncate semantic_insights if too large
+        if len(self.semantic_insights) > self.MAX_SEMANTIC_INSIGHTS_SIZE:
+            self.semantic_insights = self.semantic_insights[:self.MAX_SEMANTIC_INSIGHTS_SIZE] + "\n... [truncated]"
+
+        # Limit ast_cache size (keep most recently accessed)
+        if len(self.ast_cache) > self.MAX_AST_CACHE_ENTRIES:
+            # Keep only the first MAX_AST_CACHE_ENTRIES entries
+            keys = list(self.ast_cache.keys())[:self.MAX_AST_CACHE_ENTRIES]
+            self.ast_cache = {k: self.ast_cache[k] for k in keys}
+
+        # Limit file_hashes size
+        if len(self.file_hashes) > self.MAX_FILE_HASHES:
+            keys = list(self.file_hashes.keys())[:self.MAX_FILE_HASHES]
+            self.file_hashes = {k: self.file_hashes[k] for k in keys}
+
     def age_seconds(self) -> float:
         """Get cache age in seconds."""
         return time.time() - self.timestamp

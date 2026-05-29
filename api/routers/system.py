@@ -37,32 +37,18 @@ async def get_system_stats():
     try:
         cpu_percent = psutil.cpu_percent(interval=0.1)
         memory = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
 
+        # Frontend expects: {cpu: number, memory: number, ping: number}
         return {
-            "cpu": {
-                "percent": cpu_percent,
-                "count": psutil.cpu_count()
-            },
-            "memory": {
-                "total": memory.total,
-                "available": memory.available,
-                "percent": memory.percent,
-                "used": memory.used
-            },
-            "disk": {
-                "total": disk.total,
-                "used": disk.used,
-                "free": disk.free,
-                "percent": disk.percent
-            }
+            "cpu": round(cpu_percent, 1),
+            "memory": round(memory.percent, 1),
+            "ping": 0  # Placeholder for network ping
         }
     except Exception as e:
         return {
-            "error": str(e),
-            "cpu": {"percent": 0, "count": 0},
-            "memory": {"total": 0, "available": 0, "percent": 0, "used": 0},
-            "disk": {"total": 0, "used": 0, "free": 0, "percent": 0}
+            "cpu": 0,
+            "memory": 0,
+            "ping": 0
         }
 
 

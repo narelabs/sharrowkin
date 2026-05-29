@@ -5,9 +5,9 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from dsm import DynamicSegmentedMemory
-from dsm.embedding import normalize
-from dsm.models import RouteResult
+from ...dsm.core.memory import DynamicSegmentedMemory
+from ...dsm.indexing.embedding import normalize
+from ...dsm.core.models import RouteResult
 
 
 @dataclass(slots=True)

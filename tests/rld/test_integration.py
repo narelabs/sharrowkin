@@ -1,13 +1,7 @@
-import sys
-import os
 import asyncio
 from pathlib import Path
 
-# Добавляем пути
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../dsm/src")))
-
-from rld.core import RecursiveLatentDNA
+from memory.rld.core import RecursiveLatentDNA
 
 def test_rld_dsm_integration():
     print("RLD + DSM Integration Action Test...")

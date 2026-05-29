@@ -554,60 +554,66 @@ def fetch_url(url: str) -> str:
 def run_terminal_command(workspace: Path, command: str, timeout_seconds: int = 120) -> TestResult:
     """
     Execute a shell command in the workspace directory with safety filtering.
-
-    This tool runs terminal commands like npm install, git status, or custom scripts.
-    Commands are filtered for security - network tools (curl, wget, nc) are blocked.
-
-    Args:
-        workspace: Absolute path to the project root (command runs in this directory)
-        command: Shell command to execute (e.g., "npm install", "git status")
-        timeout_seconds: Maximum execution time (default: 120s / 2 minutes)
-
-    Returns:
-        TestResult with:
-        - success: True if exit code is 0
-        - exit_code: Command exit code (0=success, non-zero=error, -1=timeout, -2=execution failed)
-        - output: Combined stdout and stderr
-
-    Security restrictions:
-        - Blocked commands: curl, wget, nc, netcat (network tools)
-        - No shell injection - commands are parsed safely
-        - Runs in workspace directory only
-
-    Example usage:
-        # Install dependencies
-        result = run_terminal_command(Path("/project"), "npm install")
-
-        # Check git status
-        result = run_terminal_command(Path("/project"), "git status")
-
-        # Run build script
-        result = run_terminal_command(Path("/project"), "npm run build")
-
-    Best practices:
-        - Use absolute paths in workspace parameter (not relative)
-        - Check result.success before assuming command worked
-        - Read result.output to understand errors
-        - Avoid chaining commands with && - run separately for better error handling
-        - Don't use network commands (curl, wget) - they're blocked for security
-
-    Common errors:
-        - Exit code -1: Command timed out (increase timeout_seconds)
-        - Exit code -2: Command execution failed (check command syntax)
-        - Exit code 127: Command not found (check if tool is installed)
     """
+    import platform
+    
     try:
-        argv = split_safe_command(command)
-        result = subprocess.run(
-            argv,
-            cwd=workspace,
-            shell=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        # On Windows, use shell=True with cmd.exe for compatibility
+        # This handles commands like 'dir', 'type', 'cd' that don't exist as .exe
+        is_windows = platform.system() == "Windows"
+        
+        if is_windows:
+            # Translate common Unix commands to Windows equivalents
+            win_translations = {
+                "pwd": "cd",
+                "ls": "dir",
+                "ls -la": "dir",
+                "ls -l": "dir",
+                "cat": "type",
+                "rm": "del",
+                "rm -rf": "rmdir /s /q",
+                "mkdir -p": "mkdir",
+                "cp": "copy",
+                "mv": "move",
+                "clear": "cls",
+                "which": "where",
+            }
+            
+            cmd_lower = command.strip().lower()
+            for unix_cmd, win_cmd in win_translations.items():
+                if cmd_lower == unix_cmd or cmd_lower.startswith(unix_cmd + " "):
+                    command = win_cmd + command[len(unix_cmd):]
+                    break
+            
+            # Check for blocked commands
+            blocked_check = command.lower().split()
+            if blocked_check:
+                blocked = BLOCKED_COMMAND_TOKENS & {Path(part).name.lower() for part in blocked_check}
+                if blocked:
+                    return TestResult(success=False, exit_code=-2, output=f"Command blocked: {', '.join(sorted(blocked))}")
+            
+            result = subprocess.run(
+                command,
+                cwd=workspace,
+                shell=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        else:
+            argv = split_safe_command(command)
+            result = subprocess.run(
+                argv,
+                cwd=workspace,
+                shell=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=timeout_seconds,
+                check=False,
+            )
         return TestResult(
             success=result.returncode == 0,
             exit_code=result.returncode,

@@ -2,7 +2,8 @@
 
 import type React from "react"
 import { useState, useRef, useCallback, type KeyboardEvent, useEffect } from "react"
-import { Square, Mic, MicOff, X, Sparkles, Plus, Rocket, Check, ChevronDown, ArrowRight, Search } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { Square, Mic, MicOff, X, Sparkles, Plus, Rocket, Check, ChevronDown, ArrowRight, Search, Plug } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import {
@@ -14,6 +15,15 @@ import {
 } from "@/components/ui/dropdown-menu"
 import Image from "next/image"
 import { AudioWaveform } from "./audio-waveform"
+import { WorkspaceSelector } from "./workspace-selector"
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000"
+
+// Map a provider-prefixed model id (e.g. "google/gemini-2.5-flash") to the
+// provider key returned by /api/keys ({ providers: { google: true, ... } }).
+function modelProvider(modelId: string): string {
+  return modelId.split("/")[0] || ""
+}
 
 export type AIModel =
   | "google/gemini-2.5-flash"
@@ -40,6 +50,8 @@ interface ComposerProps {
   bottomOffset?: number
   planMode: PlanMode
   onPlanModeChange: (mode: PlanMode) => void
+  workspace: string | null
+  onWorkspaceChange: (path: string) => void
 }
 
 const PLAN_MODES = [
@@ -83,17 +95,42 @@ export function Composer({
   bottomOffset,
   planMode,
   onPlanModeChange,
+  workspace,
+  onWorkspaceChange,
 }: ComposerProps) {
+  const router = useRouter()
   const [value, setValue] = useState("")
   const [isRecording, setIsRecording] = useState(false)
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
   const [showImageBounce, setShowImageBounce] = useState(false)
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null)
+  const [providers, setProviders] = useState<Record<string, boolean>>({})
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const recognitionRef = useRef<any>(null)
   const baseTextRef = useRef("")
   const finalTranscriptsRef = useRef("")
+
+  // Which LLM providers have an API key configured (from /api/keys).
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/keys`)
+        if (!res.ok) return
+        const data = await res.json()
+        if (!cancelled) setProviders(data.providers || {})
+      } catch {}
+    }
+    load()
+    // Refresh when returning from the settings page.
+    const onFocus = () => load()
+    window.addEventListener("focus", onFocus)
+    return () => {
+      cancelled = true
+      window.removeEventListener("focus", onFocus)
+    }
+  }, [])
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -191,12 +228,37 @@ export function Composer({
         setTimeout(() => handleInput(), 0)
       }
     }
+    // Submit a prompt straight into the chat (same flow as pressing send), so
+    // features like the preview "Copy" action actually start the agent with
+    // the normal thinking/streaming UI instead of just pre-filling the box.
+    const handleSubmitPrompt = (e: Event) => {
+      const customEvent = e as CustomEvent<string>
+      const text = customEvent.detail?.trim()
+      if (!text) return
+      if (isStreaming || disabled || !workspace) {
+        // Can't send right now — fall back to inserting so nothing is lost.
+        setValue((prev) => (prev ? prev + "\n\n" + text : text))
+        setTimeout(() => handleInput(), 0)
+        return
+      }
+      playClickSound()
+      onSend(text)
+      setValue("")
+      baseTextRef.current = ""
+      finalTranscriptsRef.current = ""
+      if (textareaRef.current) textareaRef.current.style.height = "auto"
+    }
     window.addEventListener("sharrowkin-insert-prompt", handleInsertPrompt)
-    return () => window.removeEventListener("sharrowkin-insert-prompt", handleInsertPrompt)
-  }, [handleInput])
+    window.addEventListener("sharrowkin-submit-prompt", handleSubmitPrompt)
+    return () => {
+      window.removeEventListener("sharrowkin-insert-prompt", handleInsertPrompt)
+      window.removeEventListener("sharrowkin-submit-prompt", handleSubmitPrompt)
+    }
+  }, [handleInput, isStreaming, disabled, workspace, onSend, playClickSound])
 
   const handleSend = useCallback(() => {
     if ((!value.trim() && !uploadedImage) || isStreaming || disabled) return
+    if (!workspace) return
     playClickSound()
 
     if (isRecording && recognitionRef.current) {
@@ -211,7 +273,7 @@ export function Composer({
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto"
     }
-  }, [value, uploadedImage, isStreaming, disabled, onSend, isRecording, playClickSound])
+  }, [value, uploadedImage, isStreaming, disabled, onSend, isRecording, playClickSound, workspace])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -247,6 +309,9 @@ export function Composer({
   }, [])
 
   const currentModel = AI_MODELS.find((m) => m.id === selectedModel) || AI_MODELS[0]
+  // True once we've loaded /api/keys and the selected model's provider has a key.
+  const keysLoaded = Object.keys(providers).length > 0
+  const currentModelConnected = providers[modelProvider(currentModel.id)] === true
   const selectedModeObj = PLAN_MODES.find((m) => m.id === planMode) || PLAN_MODES[0]
   const SelectedIcon = selectedModeObj.icon
   const modePlaceholder = planMode === "autonomous"
@@ -337,8 +402,8 @@ export function Composer({
           </div>
 
           {/* Bottom Toolbar */}
-          <div className="flex items-center justify-between px-3 pb-3 pt-1">
-            <div className="flex items-center gap-1">
+          <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-1">
+            <div className="flex min-w-0 items-center gap-1">
 
               {/* Attachment Button */}
               <Button
@@ -363,7 +428,22 @@ export function Composer({
                 aria-label="Upload image"
               />
 
-              {/* Model Dropdown */}
+              {/* Model Dropdown — or "Connect API" when the provider has no key */}
+              {keysLoaded && !currentModelConnected ? (
+                <Button
+                  variant="ghost"
+                  disabled={isStreaming || disabled}
+                  onClick={() => {
+                    playClickSound()
+                    router.push("/settings?tab=general")
+                  }}
+                  title="No API key for this provider — open settings to connect"
+                  className="h-8 px-2.5 rounded-full text-amber-700 bg-amber-50 hover:bg-amber-100 hover:text-amber-800 transition-colors flex items-center gap-1.5 font-medium text-[12px]"
+                >
+                  <Plug strokeWidth={1.8} className="w-[14px] h-[14px]" />
+                  <span>Connect API</span>
+                </Button>
+              ) : (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -393,7 +473,9 @@ export function Composer({
                     sideOffset={12}
                     className="w-44 p-1.5 rounded-[16px] border border-stone-100/50 shadow-lg bg-white/95 backdrop-blur-xl z-[9999]"
                   >
-                    {AI_MODELS.map((model) => (
+                    {AI_MODELS.map((model) => {
+                      const connected = providers[modelProvider(model.id)] === true
+                      return (
                       <DropdownMenuItem
                         key={model.id}
                         onClick={() => {
@@ -401,7 +483,8 @@ export function Composer({
                           onModelChange(model.id)
                         }}
                         className={cn(
-                          "flex items-center cursor-pointer gap-2.5 rounded-[10px] px-2.5 py-2 text-[13px] text-stone-700 transition-colors",
+                          "flex items-center cursor-pointer gap-2.5 rounded-[10px] px-2.5 py-2 text-[13px] text-stone-700 transition-colors outline-none",
+                          "focus:!bg-stone-50/80 focus:!text-stone-900 data-[highlighted]:!bg-stone-50/80 data-[highlighted]:!text-stone-900",
                           selectedModel === model.id ? "bg-stone-100 font-medium text-stone-900" : "hover:bg-stone-50"
                         )}
                       >
@@ -412,12 +495,31 @@ export function Composer({
                           height={16}
                           className="rounded-sm object-contain"
                         />
-                        <span>{model.name}</span>
+                        <span className="flex-1">{model.name}</span>
+                        {keysLoaded && (
+                          <span
+                            title={connected ? "API key configured" : "No API key for this provider"}
+                            className={cn(
+                              "h-1.5 w-1.5 shrink-0 rounded-full",
+                              connected ? "bg-emerald-500" : "bg-stone-300"
+                            )}
+                          />
+                        )}
                       </DropdownMenuItem>
-                    ))}
+                      )
+                    })}
                   </DropdownMenuContent>
                 </DropdownMenuPortal>
               </DropdownMenu>
+              )}
+
+              {/* Working folder selector (chat-style, inline) */}
+              <div className="mx-0.5 h-4 w-px bg-stone-200/70" />
+              <WorkspaceSelector
+                workspace={workspace}
+                onSelect={onWorkspaceChange}
+                disabled={isStreaming || disabled}
+              />
             </div>
 
             <div className="flex items-center gap-2">
@@ -516,15 +618,16 @@ export function Composer({
                   {/* Submit arrow button */}
                   <button
                     onClick={handleSend}
-                    disabled={(!value.trim() && !uploadedImage) || disabled}
+                    disabled={(!value.trim() && !uploadedImage) || disabled || !workspace}
+                    title={!workspace ? "Choose a working folder first" : undefined}
                     className={cn(
                       "relative h-8 w-8 shrink-0 transition-all duration-200 rounded-full flex items-center justify-center text-white shadow-[0_2px_12px_rgba(0,0,0,0.15)]",
-                      (!value.trim() && !uploadedImage) || disabled
+                      (!value.trim() && !uploadedImage) || disabled || !workspace
                         ? "opacity-40 cursor-not-allowed grayscale bg-stone-400"
                         : "cursor-pointer hover:-translate-y-[1px] hover:shadow-[0_4px_20px_rgba(0,0,0,0.2)] active:scale-95"
                     )}
                     style={
-                      (!value.trim() && !uploadedImage) || disabled
+                      (!value.trim() && !uploadedImage) || disabled || !workspace
                         ? undefined
                         : { backgroundImage: 'linear-gradient(180deg, #2c2c2c 0%, #111111 100%)' }
                     }

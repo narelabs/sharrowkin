@@ -211,7 +211,7 @@ export default function WorkflowPage() {
   }
 
   return (
-    <div className="h-dvh bg-background flex overflow-hidden">
+    <div className="h-full bg-background flex overflow-hidden">
       <Suspense>
         <LeftSidebar isOpen={leftSidebarOpen} onToggle={() => setLeftSidebarOpen(!leftSidebarOpen)} />
       </Suspense>

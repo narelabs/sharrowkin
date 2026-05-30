@@ -1,10 +1,11 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
-import { useSearchParams } from "next/navigation"
+import { useSearchParams, useRouter } from "next/navigation"
 import { ArrowDownToLine, MessageSquareDashed, PanelRight, Cpu } from "lucide-react"
 import { MessageList } from "./message-list"
 import { Composer, type AIModel } from "./composer"
+import { getSessionWorkspace, setSessionWorkspace, folderName } from "@/lib/workspace"
 import { Button } from "@/components/ui/button"
 import { LeftSidebar } from "./left-sidebar"
 import { RightSidebar } from "./right-sidebar"
@@ -169,8 +170,13 @@ function generateId(): string {
 
 export function ChatShell() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const activeSessionId = searchParams?.get("session") || "session-1"
   const STORAGE_KEY = `sharrowkin-session-messages-${activeSessionId}`
+
+  // Layer 1 of a session: the working folder. Until it's chosen, the
+  // composer (Layer 2) stays gated behind the WorkspaceGate screen.
+  const [sessionWorkspace, setSessionWorkspaceState] = useState<string | null>(null)
 
   const [messages, setMessages] = useState<Message[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
@@ -316,11 +322,34 @@ export function ChatShell() {
   ])
   const [isRunningTask, setIsRunningTask] = useState(false)
   const [activeTaskPlan, setActiveTaskPlan] = useState<TaskPlan[]>([])
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [currentInput, setCurrentInput] = useState("")
   const [terminalDock, setTerminalDock] = useState<"sidebar" | "bottom">("sidebar")
   const [isDraggingTerminal, setIsDraggingTerminal] = useState(false)
   const [terminalHeight, setTerminalHeight] = useState(250)
   const [isResizingTerminal, setIsResizingTerminal] = useState(false)
+
+  // Detect a dev-server URL from terminal output (e.g. "Local: http://localhost:3000")
+  // and surface it to the Agent Computer's Preview tab. Scans newest-first so a
+  // freshly started server wins; the last detected URL becomes the preview.
+  useEffect(() => {
+    const urlRe = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s"'`]*)?/i
+    for (let i = terminalLines.length - 1; i >= 0; i--) {
+      const m = terminalLines[i].match(urlRe)
+      if (m) {
+        // Normalize 0.0.0.0 -> localhost so the iframe can actually load it.
+        const found = m[0].replace("0.0.0.0", "localhost")
+        setPreviewUrl((prev) => {
+          if (prev === found) return prev
+          // New dev-server URL: reveal it by opening the Preview tab.
+          setAgentComputerView("browser")
+          setAgentComputerOpen(true)
+          return found
+        })
+        return
+      }
+    }
+  }, [terminalLines])
 
   // Run a real command via the backend terminal API
   const runRealCommand = useCallback(async (cmd: string) => {
@@ -455,8 +484,33 @@ export function ChatShell() {
     return () => window.removeEventListener("open-workspace-panel", handleOpenWorkspace)
   }, [])
 
+  // Title-bar quick actions (desktop): toggle the left sidebar and start a new
+  // chat session. Wired via custom events so the frameless-window title bar can
+  // drive the chat shell without prop drilling.
+  useEffect(() => {
+    const onToggleSidebar = () => setLeftSidebarOpen((v) => !v)
+    const onNewChat = () => {
+      const newId = `session-${Date.now()}`
+      try {
+        const raw = localStorage.getItem("sharrowkin-sessions-list")
+        const list = raw ? JSON.parse(raw) : []
+        const next = [{ id: newId, label: `New agent session ${list.length + 1}` }, ...list]
+        localStorage.setItem("sharrowkin-sessions-list", JSON.stringify(next))
+      } catch {}
+      router.push(`/chat?session=${newId}`)
+    }
+    window.addEventListener("sharrowkin-toggle-sidebar", onToggleSidebar)
+    window.addEventListener("sharrowkin-new-chat", onNewChat)
+    return () => {
+      window.removeEventListener("sharrowkin-toggle-sidebar", onToggleSidebar)
+      window.removeEventListener("sharrowkin-new-chat", onNewChat)
+    }
+  }, [router])
+
   // Load messages from localStorage on mount and when active session changes
   useEffect(() => {
+    // Load this session's working folder (Layer 1 selection).
+    setSessionWorkspaceState(getSessionWorkspace(activeSessionId))
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
       if (stored) {
@@ -513,6 +567,12 @@ export function ChatShell() {
     setSelectedModel(model)
     localStorage.setItem(MODEL_STORAGE_KEY, model)
   }, [])
+
+  const handleSelectWorkspace = useCallback((path: string) => {
+    setSessionWorkspace(activeSessionId, path)
+    setSessionWorkspaceState(path)
+    setProjectIntelligence((prev) => ({ ...prev, workspacePath: path }))
+  }, [activeSessionId])
 
   const resetAgentWorkspace = useCallback(() => {
     socketRef.current?.close()
@@ -675,8 +735,10 @@ export function ChatShell() {
         ws.onopen = async () => {
           const githubToken = localStorage.getItem("github_token") || ""
 
-          // Try to get workspace from multiple sources
-          let workspace = localStorage.getItem("sharrowkin-workspace-path") ||
+          // Prefer this session's chosen folder (Layer 1). Fall back to the
+          // legacy global lookup only if somehow unset.
+          let workspace = getSessionWorkspace(activeSessionId) ||
+                         localStorage.getItem("sharrowkin-workspace-path") ||
                          projectIntelligence.workspacePath || ""
 
           // If still empty, fetch from backend settings
@@ -993,6 +1055,7 @@ export function ChatShell() {
                 str_replace: "Edited",
                 list_files: "List files",
                 search_files: "Search",
+                find_symbol: "Find symbol",
                 run_command: "Terminal",
                 attempt_completion: "Completed",
                 analyze_dependencies: "Analyze dependencies",
@@ -1001,8 +1064,12 @@ export function ChatShell() {
                 llm_generate: "Thought",
                 terminal: "Terminal",
                 run_tests: "Run tests",
+                verify: "Verify",
                 search_code: "Search",
                 git_diff: "Git diff",
+                git: "Git",
+                update_plan: "Plan",
+                spawn_subagent: "Sub-agent",
               }
               const label = toolLabels[data.tool] || data.tool
               const target = data.target || ""
@@ -1212,7 +1279,7 @@ export function ChatShell() {
         setIsStreaming(false)
       }
     },
-    [messages, isStreaming, selectedModel, appendToolActivity, setPhaseStatus, workspacePath, agentState.phase, planMode],
+    [messages, isStreaming, selectedModel, appendToolActivity, setPhaseStatus, workspacePath, agentState.phase, planMode, activeSessionId],
   )
 
   const retry = useCallback(() => {
@@ -1243,7 +1310,7 @@ export function ChatShell() {
   }, [STORAGE_KEY, resetAgentWorkspace])
 
   return (
-    <div className="h-dvh bg-white flex overflow-hidden text-stone-900">
+    <div className="h-full bg-white flex overflow-hidden text-stone-900">
       {/* Left Sidebar */}
       <LeftSidebar isOpen={leftSidebarOpen} onToggle={() => setLeftSidebarOpen(!leftSidebarOpen)} />
 
@@ -1267,7 +1334,7 @@ export function ChatShell() {
         <div className={cn("flex-1 flex flex-col relative min-w-0 transition-all duration-300 bg-white", activeDiffFile ? "max-w-[50%]" : "max-w-full")}>
           <div className="relative z-[9999] flex h-12 shrink-0 items-center justify-between px-5 text-[13px] bg-white">
             <div className="flex min-w-0 items-center gap-3">
-              <span className="truncate font-normal text-stone-900">{workspacePath}</span>
+              <span className="truncate font-normal text-stone-900">{sessionWorkspace ? folderName(sessionWorkspace) : workspacePath}</span>
               <span className="hidden rounded-full bg-stone-50 px-2 py-1 text-[12px] text-stone-500 sm:inline-flex">agent workspace</span>
             </div>
             <div className="relative z-[9999] flex items-center gap-1.5 text-stone-500">
@@ -1370,6 +1437,8 @@ export function ChatShell() {
                onModelChange={handleModelChange}
                planMode={planMode}
                onPlanModeChange={setPlanMode}
+               workspace={sessionWorkspace}
+               onWorkspaceChange={handleSelectWorkspace}
                bottomOffset={terminalDock === "bottom" ? (terminalHeight + 24) : (isDraggingTerminal && terminalDock === "sidebar") ? 204 : 24}
              />
           </div>
@@ -1405,6 +1474,7 @@ export function ChatShell() {
         fileDiffs={fileDiffs}
         isAgentActive={isStreaming || agentState.status === "running" || agentState.status === "thinking"}
         currentAction={agentAction}
+        previewUrl={previewUrl}
       />
 
       {/* Right Sidebar with Terminal/Logs/Info */}

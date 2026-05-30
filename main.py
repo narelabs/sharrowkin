@@ -100,11 +100,15 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
+    # When packaged as a standalone executable (PyInstaller sidecar), the
+    # auto-reloader must be off — it would spawn orphan supervisor processes
+    # and the import-string form ("main:app") doesn't resolve in a frozen app.
+    is_frozen = getattr(sys, "frozen", False)
     uvicorn.run(
-        "main:app",
+        app if is_frozen else "main:app",
         host="127.0.0.1",
         port=8000,
-        reload=True,
+        reload=not is_frozen,
         ws_ping_interval=30.0,  # Send ping every 30 seconds
         ws_ping_timeout=300.0,  # Wait 5 minutes for pong response
         timeout_keep_alive=300  # Keep connection alive for 5 minutes

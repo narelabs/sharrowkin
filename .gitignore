@@ -64,7 +64,24 @@ ui/out/
 # Tauri desktop build
 ui/src-tauri/target/
 ui/src-tauri/gen/schemas/
+ui/src-tauri/binaries/
+
+# PyInstaller backend sidecar build
+dist_backend/
+build_backend/
 
 # Agent runtime data (memory store, indexes)
 .sharrowkin/
 .codegraph/
+
+# Local test DB artifacts
+*.db
+.rld_action_test.db
+
+# Scratch / temp working files (not part of the project)
+run_method.txt
+task*_details.txt
+temp_section*.txt
+*.tmp
+scratch/
+

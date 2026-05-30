@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { cn } from "@/lib/utils"
 import type { Message, ToolStep, TaskPlan } from "./chat-shell"
-import { Loader2, CheckCircle2, ChevronRight, ChevronDown, CircleDashed, FileCode, XCircle, ListTodo, Clock, Bug, AlertCircle, Lightbulb, Bot, Search, Wrench, FlaskConical, Brain } from "lucide-react"
+import { Loader2, CheckCircle2, ChevronRight, ChevronDown, CircleDashed, FileCode, XCircle, ListTodo, Clock, Bug, AlertCircle, Lightbulb, Bot, Search, Wrench, FlaskConical, Brain, GitBranch, Users } from "lucide-react"
 import { MarkdownRenderer } from "./markdown-renderer"
 import { RepoSelectorCard } from "./repo-selector-card"
 import { StreamingEditedSteps, useStreamingEdits } from "./streaming-edited-steps"
@@ -47,7 +47,7 @@ function getTaskIcon(status: string) {
   return <CircleDashed strokeWidth={1.5} className="w-3 h-3 text-stone-300" />
 }
 
-type AgentActivityKind = "thinking" | "searching" | "tool" | "testing" | "working" | "file"
+type AgentActivityKind = "thinking" | "searching" | "tool" | "testing" | "working" | "file" | "git" | "delegate"
 
 function stripRawFunctionCalls(content: string) {
   const withoutCompleteBlocks = content.replace(/<function_calls>[\s\S]*?<\/function_calls>/g, "")
@@ -74,8 +74,10 @@ function getActivityKind(step: ToolStep): AgentActivityKind {
   const text = `${step.name} ${step.description || ""}`.toLowerCase()
   if (/^edited\s/.test(text) || /\+\d+\s*$/.test(step.name)) return "file"
   if (/\.(tsx?|jsx?|css|scss|py|html|md|json|ya?ml|mjs|cjs)\b/.test(text) || /\+\d+\s*[−-]\d+/.test(text)) return "file"
+  if (/^git\b|git diff|commit|branch|staged/.test(text)) return "git"
+  if (/sub-?agent|delegat/.test(text)) return "delegate"
   if (/^thought\b|think|reason|plan|context|^memory\s/.test(text)) return "thinking"
-  if (/^read\s|search|explor|inspect|^scan\s|index|find|grep|rg|list/.test(text)) return "searching"
+  if (/^read\s|search|explor|inspect|^scan\s|index|find|grep|rg|list|symbol/.test(text)) return "searching"
   if (/test|verify|build|lint|pytest|npm|check|^run tests/.test(text)) return "testing"
   if (/tool|command|^terminal|patch|diff|edit|prepared/.test(text)) return "tool"
   return "working"
@@ -86,6 +88,8 @@ function getKindLabel(kind: AgentActivityKind) {
   if (kind === "thinking") return "Thinking"
   if (kind === "searching") return "Searching"
   if (kind === "testing") return "Testing"
+  if (kind === "git") return "Version control"
+  if (kind === "delegate") return "Delegating"
   if (kind === "tool") return "Using tool"
   return "Working"
 }
@@ -95,6 +99,8 @@ function getKindIcon(kind: AgentActivityKind) {
   if (kind === "thinking") return Brain
   if (kind === "searching") return Search
   if (kind === "testing") return FlaskConical
+  if (kind === "git") return GitBranch
+  if (kind === "delegate") return Users
   if (kind === "tool") return Wrench
   return Bot
 }

@@ -62,6 +62,17 @@ export function LeftSidebar({ isOpen, onToggle }: LeftSidebarProps) {
     }
   }, [])
 
+  // Title-bar "Search" quick action: make sure the sidebar is open and reveal
+  // the session search field. Toggle is handled by the parent via onToggle.
+  useEffect(() => {
+    const onOpenSearch = () => {
+      if (!isOpen) onToggle()
+      setSessionSearchOpen(true)
+    }
+    window.addEventListener("sharrowkin-open-search", onOpenSearch)
+    return () => window.removeEventListener("sharrowkin-open-search", onOpenSearch)
+  }, [isOpen, onToggle])
+
   useEffect(() => {
     const storedSessions = localStorage.getItem("sharrowkin-sessions-list")
     if (storedSessions) {

@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from "next"
 import { Inter } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
 import { Providers } from "@/components/providers"
+import { TitleBar } from "@/components/title-bar"
 import "./globals.css"
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" })
@@ -46,7 +47,12 @@ export default function RootLayout({
     <html lang="en" data-theme="dark">
       <body className={`${inter.variable} font-sans antialiased bg-[#f8f8fa] text-stone-800`}>
         <Providers>
-          {children}
+          <div className="flex h-full flex-col overflow-hidden">
+            <TitleBar />
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {children}
+            </div>
+          </div>
         </Providers>
         <Analytics />
       </body>

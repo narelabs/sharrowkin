@@ -201,9 +201,11 @@ async def agent_websocket(websocket: WebSocket):
         # Start background sender
         send_task = asyncio.create_task(send_events())
 
-        # Run agent and stream events (pass workspace_path as string)
+        # Run agent and stream events (pass workspace_path as string).
+        # Pass the stable session_id so the agent's disk-backed conversation
+        # history is reused across messages (and survives backend restarts).
         last_ping = time.time()
-        async for event in agent.run(task, workspace_path=str(workspace)):
+        async for event in agent.run(task, workspace_path=str(workspace), session_id=session_id):
             try:
                 # Try to put event in queue, drop oldest if full
                 try:

@@ -11,7 +11,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 
-[Quickstart](#getting-started) · [How it works](#the-5-phase-reasoning-cycle) · [Memory](#memory-systems) · [Configuration](#configuration)
+[Install](#install-desktop) · [Quickstart](#getting-started) · [How it works](#the-5-phase-reasoning-cycle) · [Memory](#memory-systems) · [Configuration](#configuration)
 
 </div>
 
@@ -39,13 +39,28 @@ Everything runs on your machine: a FastAPI backend drives the reasoning loop and
 >
 > Want to see it now? Follow the [Quickstart](#getting-started) and open `http://localhost:3000`.
 
+## Install (desktop)
+
+The easiest way to run Sharrowkin is the desktop app. It bundles the Python backend as a sidecar, so there's no Python or Node setup.
+
+1. Download the latest installer from the [Releases](https://github.com/narelabs/sharrowkin/releases) page:
+   - **Windows**: `Sharrowkin Agent_0.1.2_x64-setup.exe` (NSIS) or `Sharrowkin Agent_0.1.2_x64_en-US.msi`
+2. Run the installer and launch **Sharrowkin Agent**.
+3. Add an LLM API key in **Settings**, choose a workspace folder, and start a session.
+
+> Building the desktop app yourself? See [Building the desktop app](#building-the-desktop-app).
+
 ## Key Features
 
 - **5-phase reasoning cycle** — every task flows through Observe → Recall → Reason → Stabilize → Commit, giving the agent structure instead of one-shot guessing.
-- **Persistent memory** — four memory systems (DSM, RLD, MemoryField, TraceMemory) let the agent recall context, successful plans, and prior traces across sessions.
+- **Persistent memory** — four memory systems (DSM, RLD, MemoryField, TraceMemory) let the agent recall context, successful plans, and prior traces across sessions. Conversation history is persisted to disk per session, so the agent remembers your dialog even after a restart.
 - **Live agent workspace** — watch files open, code stream in, commands run, and diffs render in real time, Devin-style.
+- **Built-in preview browser** — when the agent starts a dev server, its URL is detected automatically and rendered in an embedded Preview tab. Sites are shown at desktop width and scaled to fit, so responsive layouts look right.
+- **Point-and-fix** — select any region of the live preview and send a note straight to the agent ("fix this spacing", "this button is off").
+- **Clone a site** — paste a URL and the agent recreates it in your workspace — the whole site, or just the part you like.
 - **Bring your own model** — works with Gemini, Anthropic, OpenAI, or OpenRouter. Configure keys via `.env` or the settings UI.
 - **GitHub integration** — connect a repo via OAuth and let the agent work against real projects.
+- **Native desktop app** — ships as a Tauri desktop build with a custom window frame; the Python backend is bundled as a sidecar, so end users don't need Python installed.
 - **Local and private** — your code never leaves your machine except for the LLM calls you configure.
 
 ## Architecture
@@ -160,6 +175,26 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) and start a session.
+
+## Building the desktop app
+
+The desktop app is a [Tauri](https://tauri.app/) shell that bundles the Next.js UI and a PyInstaller-built backend sidecar.
+
+```bash
+# 1. Build the backend sidecar (from repo root)
+pyinstaller --noconfirm --clean sharrowkin-backend.spec
+#    Produces dist/sharrowkin-backend.exe
+
+# 2. Copy it into the Tauri sidecar location with the target-triple name
+#    Windows x64 example:
+cp dist/sharrowkin-backend.exe \
+   ui/src-tauri/binaries/sharrowkin-backend-x86_64-pc-windows-msvc.exe
+
+# 3. Build the installer (runs `next build`, then bundles)
+cd ui && npm run tauri:build
+```
+
+Installers are written to `ui/src-tauri/target/release/bundle/` (`.msi` and `.exe` on Windows). The app version is set in `ui/src-tauri/tauri.conf.json`, `ui/src-tauri/Cargo.toml`, and `ui/package.json` — keep them in sync.
 
 ## Configuration
 

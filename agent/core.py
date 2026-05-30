@@ -550,14 +550,102 @@ class SharrowkinAgent:
             bus=self._event_bus,
         )
 
-    def _build_loop_context(self, state: "AgentRunState") -> str:
+    async def _generate_plan(self, state: "AgentRunState") -> str:
+        """Generate a hierarchical plan and emit it to the UI. Non-fatal.
+
+        Returns a compact markdown checklist for injection into the loop's
+        initial context, or "" if planning is unavailable/failed.
+        """
+        if not self.gemini.configured:
+            return ""
+        try:
+            from planning import HierarchicalPlanner, PlanningContext
+
+            planner = HierarchicalPlanner()
+            context = PlanningContext(
+                goal=state.task,
+                workspace_path=state.workspace,
+                available_tools=[
+                    "read_file", "list_files", "search_files", "find_symbol",
+                    "write_file", "str_replace", "run_command", "run_tests",
+                    "verify", "git", "spawn_subagent",
+                ],
+            )
+            task_graph = await asyncio.to_thread(planner.plan, state.task, context)
+            state.task_graph = task_graph
+            return self._format_plan(task_graph)
+        except Exception as exc:
+            print(f"[AGENT] Planning failed (non-fatal): {exc}")
+            return ""
+
+    def _format_plan(self, task_graph: Any) -> str:
+        """Serialize a TaskGraph to a compact markdown checklist.
+
+        Uses real Task fields (title, estimated_time, depends_on). Skips the
+        synthetic root task and orders by dependency count so prerequisites
+        come first.
+        """
+        try:
+            tasks = [t for t in task_graph.tasks.values() if not t.metadata.get("is_root")]
+            if not tasks:
+                return ""
+            tasks.sort(key=lambda t: (len(t.depends_on), t.title))
+            lines: list[str] = []
+            for i, t in enumerate(tasks[:20], start=1):
+                est = f" (~{t.estimated_time:.0f}min)" if t.estimated_time else ""
+                lines.append(f"{i}. {t.title}{est}")
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
+    def _build_hook_runner(self, workspace: Path) -> Any:
+        """Build a HookRunner with a safe default policy for the tool loop.
+
+        Denies dangerous shell commands, keeps file ops within the workspace,
+        and allows the audited git tool. Returns None if the hooks subsystem
+        is unavailable (loop then runs unguarded, as before).
+        """
+        try:
+            from core.hooks.runner import HookRunner
+            from core.hooks.policy import (
+                PolicyEnforcer, allow, deny, workspace_only,
+            )
+            from core.hooks.policy import Decision  # noqa: F401  (ensure module import)
+            from core.hooks.builtin import create_logging_hooks
+
+            dangerous = {"rm", "sudo", "su", "chmod", "chown", "mkfs", "dd", "curl", "wget", "ssh", "scp"}
+
+            def has_dangerous_token(args: dict) -> bool:
+                cmd = (args.get("command") or "").lower()
+                return any(tok in cmd.split() for tok in dangerous)
+
+            policies = [
+                deny("run_command", when=has_dangerous_token, name="deny_dangerous_commands"),
+                allow("write_file", when=workspace_only(str(workspace)), name="write_in_workspace"),
+                allow("str_replace", when=workspace_only(str(workspace)), name="edit_in_workspace"),
+                allow("*", name="allow_others"),
+            ]
+
+            runner = HookRunner()
+            runner.register_hook(PolicyEnforcer(policies))
+            for hook in create_logging_hooks():
+                runner.register_hook(hook)
+            return runner
+        except Exception as exc:
+            print(f"[AGENT] Hook runner unavailable (non-fatal): {exc}")
+            return None
+
+    def _build_loop_context(self, state: "AgentRunState", plan_text: str = "") -> str:
         """Assemble the workspace + memory context handed to the tool loop.
 
         The loop discovers files itself via tools, so this is a lightweight
         orientation block (not full file dumps): workspace summary, complexity
-        signals, and recalled DSM/RLD/Trace memory.
+        signals, recalled DSM/RLD/Trace memory, and (if available) a suggested
+        plan to follow.
         """
         parts: list[str] = []
+        if plan_text:
+            parts.append(f"## Suggested plan\n{plan_text}\n(Refine it with the update_plan tool as you work.)")
         if state.workspace_summary:
             parts.append(f"## Workspace\n{state.workspace_summary[:6000]}")
         if state.total_files:
@@ -738,6 +826,7 @@ class SharrowkinAgent:
         workspace_path: str,
         plan_mode: str = "autonomous",
         *,
+        session_id: str | None = None,
         event_bus: EventBus | None = None,
     ) -> AsyncIterator[dict[str, object]]:
         """Execute a Run.
@@ -796,15 +885,32 @@ class SharrowkinAgent:
             self.failure_history = []
             memory = self.active_memory
 
-            # ✅ NEW: Initialize conversation history for this session
+            # ✅ NEW: Initialize conversation history for this session.
+            # Use the caller-supplied session_id (stable across messages in the
+            # same chat) so the on-disk conversation file is reused and the agent
+            # actually remembers prior turns — even after a backend restart.
+            # Falling back to a timestamp id only when none is provided keeps the
+            # old behavior for ad-hoc/headless runs.
             from memory.conversation import ConversationHistory
-            session_id = f"session_{int(time.time())}"
+            conv_session_id = session_id or f"session_{int(time.time())}"
             self.conversation = ConversationHistory(
-                session_id=session_id,
+                session_id=conv_session_id,
                 workspace=workspace,
                 max_messages=50,
                 context_window=10
             )
+
+            # Hydrate the in-RAM conversation_history (the list _format_history
+            # reads) from the disk-backed ConversationHistory so the agent
+            # remembers prior turns across backend restarts and session
+            # eviction. Only when RAM history is empty: a reused in-process
+            # agent already holds the live turns, and re-hydrating would
+            # duplicate them. Done BEFORE add_message below so the current task
+            # isn't pulled in twice.
+            if not self.conversation_history and len(self.conversation) > 0:
+                for _m in self.conversation.get_recent_context(n=self.conversation.max_messages):
+                    self.conversation_history.append({"role": _m.role, "content": _m.content})
+                print(f"[DEBUG] Hydrated conversation_history from disk: {len(self.conversation_history)} messages")
 
             # Add current user message to conversation
             self.conversation.add_message("user", task)
@@ -980,6 +1086,11 @@ class SharrowkinAgent:
                                     response = f"Привет! Я {agent_name} — автономный агент-разработчик. Чем могу помочь?"
                         # Store assistant response
                         self.conversation_history.append({"role": "assistant", "content": response})
+                        # Also persist to the disk-backed conversation so the
+                        # reply survives a restart (the user turn was already
+                        # saved above when self.conversation.add_message ran).
+                        if self.conversation:
+                            self.conversation.add_message("assistant", response)
                         # Keep history manageable (last 20 messages)
                         if len(self.conversation_history) > 20:
                             self.conversation_history = self.conversation_history[-20:]
@@ -1315,13 +1426,24 @@ Use format:
                     # agent/tool_loop.py. The old _reason/_stabilize methods are
                     # kept (deprecated) for the checkpoint-resume path.
                     with self._tracer.start_as_current_span("phase_reason"):
-                        toolbox = AgentToolbox(state.workspace)
+                        # Generate a hierarchical plan (non-fatal) and surface it
+                        # to the UI + inject it into the loop's initial context so
+                        # the agent actually follows a plan.
+                        plan_text = await self._generate_plan(state)
+
+                        hook_runner = self._build_hook_runner(state.workspace)
+                        toolbox = AgentToolbox(
+                            state.workspace,
+                            gemini=self.gemini,
+                            hook_runner=hook_runner,
+                        )
                         loop = ToolLoop(
                             self.gemini,
                             toolbox,
                             max_steps=self.max_iterations,
+                            max_extensions=self.config.execution.max_extensions,
                         )
-                        initial_context = self._build_loop_context(state)
+                        initial_context = self._build_loop_context(state, plan_text)
                         try:
                             async for event in loop.run(
                                 state.task,

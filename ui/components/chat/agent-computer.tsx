@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { FileCode, TerminalSquare, GitCompare, Cpu, X, FileText, Loader2, Pencil, FilePlus2, Eye } from "lucide-react"
+import { FileCode, TerminalSquare, GitCompare, Cpu, X, FileText, Loader2, Pencil, FilePlus2, Eye, Globe, RotateCw, ExternalLink, MessageSquarePlus, Send, Copy } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-export type AgentComputerView = "editor" | "terminal" | "diff"
+export type AgentComputerView = "editor" | "terminal" | "diff" | "browser"
 
 export interface AgentFile {
   path: string
@@ -28,6 +28,7 @@ interface AgentComputerProps {
   fileDiffs: Map<string, string>
   isAgentActive: boolean
   currentAction?: string
+  previewUrl?: string | null
 }
 
 function fileLanguage(path: string): string {
@@ -68,6 +69,7 @@ export function AgentComputer({
   fileDiffs,
   isAgentActive,
   currentAction,
+  previewUrl,
 }: AgentComputerProps) {
   const editorBodyRef = useRef<HTMLDivElement>(null)
   const terminalEndRef = useRef<HTMLDivElement>(null)
@@ -108,12 +110,125 @@ export function AgentComputer({
     }
   }, [terminalLines, view])
 
+  // Browser/preview state: editable address bar synced to the detected URL,
+  // plus a key bumped on reload to force the iframe to remount.
+  const [urlInput, setUrlInput] = useState("")
+  const [loadedUrl, setLoadedUrl] = useState("")
+  const [reloadKey, setReloadKey] = useState(0)
+
+  // Render the site at a real desktop width and scale it down to fit the
+  // panel, so responsive layouts show their desktop form instead of collapsing
+  // into a cramped mobile view.
+  const PREVIEW_DESIGN_WIDTH = 1280
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [viewportWidth, setViewportWidth] = useState(0)
+  const [viewportHeight, setViewportHeight] = useState(0)
+
+  // Annotation mode: drag a box over the preview and send a note to the agent.
+  const [annotateMode, setAnnotateMode] = useState(false)
+  const [selRect, setSelRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
+  const [note, setNote] = useState("")
+
+  // Clone ("Copy") mode: enter a URL and ask the agent to recreate the whole
+  // site or just a specific part/style you like.
+  const [cloneOpen, setCloneOpen] = useState(false)
+  const [cloneUrl, setCloneUrl] = useState("")
+  const [cloneScope, setCloneScope] = useState<"whole" | "part">("whole")
+  const [cloneWhat, setCloneWhat] = useState("")
+
+  useEffect(() => {
+    // When the agent surfaces a new dev-server URL, adopt it as the address.
+    if (previewUrl && previewUrl !== loadedUrl) {
+      setUrlInput(previewUrl)
+      setLoadedUrl(previewUrl)
+    }
+  }, [previewUrl]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Track the viewport width so we can compute the desktop->panel scale factor.
+  useEffect(() => {
+    const el = viewportRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        setViewportWidth(e.contentRect.width)
+        setViewportHeight(e.contentRect.height)
+      }
+    })
+    ro.observe(el)
+    setViewportWidth(el.clientWidth)
+    setViewportHeight(el.clientHeight)
+    return () => ro.disconnect()
+  }, [view, loadedUrl])
+
+  const normalizeUrl = useCallback((raw: string): string => {
+    const v = raw.trim()
+    if (!v) return ""
+    return /^https?:\/\//i.test(v) ? v : `http://${v}`
+  }, [])
+
+  const navigate = useCallback(() => {
+    const next = normalizeUrl(urlInput)
+    if (!next) return
+    setLoadedUrl(next)
+    setReloadKey((k) => k + 1)
+  }, [urlInput, normalizeUrl])
+
+  // Send the annotation (selection box + note) to the composer as a structured
+  // hint. The user reviews and presses send — same pattern as welcome prompts.
+  const sendAnnotation = useCallback(() => {
+    if (!note.trim()) return
+    const scale = viewportWidth > 0 ? viewportWidth / PREVIEW_DESIGN_WIDTH : 1
+    let region = ""
+    if (selRect) {
+      // Convert the on-screen box back to the site's own (desktop) coordinates.
+      const rx = Math.round(selRect.x / scale)
+      const ry = Math.round(selRect.y / scale)
+      const rw = Math.round(selRect.w / scale)
+      const rh = Math.round(selRect.h / scale)
+      region = ` (region ~${rw}×${rh}px at x:${rx}, y:${ry} on a ${PREVIEW_DESIGN_WIDTH}px-wide layout)`
+    }
+    const msg = `Looking at the preview of ${loadedUrl || "the site"}${region}: ${note.trim()}`
+    window.dispatchEvent(new CustomEvent("sharrowkin-insert-prompt", { detail: msg }))
+    setNote("")
+    setSelRect(null)
+    setAnnotateMode(false)
+  }, [note, selRect, viewportWidth, loadedUrl])
+
+  // Build a "clone this site" instruction for the agent and drop it in the
+  // composer. The agent can fetch the URL (run_command/curl) and recreate it.
+  const sendClone = useCallback(() => {
+    const target = normalizeUrl(cloneUrl)
+    if (!target) return
+    const what = cloneWhat.trim()
+    let msg: string
+    if (cloneScope === "whole") {
+      msg =
+        `Clone the website at ${target} into this workspace. ` +
+        `Fetch the page (e.g. curl) and inspect its HTML, layout, and styling, then recreate it as faithfully as you can — ` +
+        `structure, sections, colors, typography, and responsive behavior. Build it with the workspace's existing stack/conventions, ` +
+        `and start a dev server so I can preview the result.` +
+        (what ? ` Notes: ${what}` : "")
+    } else {
+      msg =
+        `Look at ${target} and reproduce ${what || "the part I like"} in this workspace. ` +
+        `Fetch the page, study how that piece is built (markup + CSS), and recreate just that — matching its look and feel — ` +
+        `using the workspace's existing stack/conventions. Don't copy the whole site, only ${what || "that part"}.`
+    }
+    window.dispatchEvent(new CustomEvent("sharrowkin-submit-prompt", { detail: msg }))
+    setCloneOpen(false)
+    setCloneWhat("")
+  }, [cloneUrl, cloneScope, cloneWhat, normalizeUrl])
+
   if (!isOpen) return null
+
+  const previewScale = viewportWidth > 0 ? viewportWidth / PREVIEW_DESIGN_WIDTH : 1
 
   const tabs: { id: AgentComputerView; label: string; icon: typeof FileCode }[] = [
     { id: "editor", label: "Editor", icon: FileCode },
     { id: "terminal", label: "Terminal", icon: TerminalSquare },
     { id: "diff", label: "Diff", icon: GitCompare },
+    { id: "browser", label: "Preview", icon: Globe },
   ]
 
   const fileList = Array.from(files.values())
@@ -192,8 +307,8 @@ export function AgentComputer({
 
       {/* Body: file list + content */}
       <div className="flex flex-1 overflow-hidden bg-stone-50/40">
-        {/* File list — shown for editor & diff views */}
-        {view !== "terminal" && fileList.length > 0 && (
+        {/* File list — shown for editor & diff views (not terminal/browser) */}
+        {view !== "terminal" && view !== "browser" && fileList.length > 0 && (
           <div className="flex w-[160px] shrink-0 flex-col border-r border-stone-100/50 bg-white/60 overflow-y-auto no-scrollbar">
             <div className="px-3 py-2 text-[10px] font-medium uppercase tracking-widest text-stone-400">
               Files · {fileList.length}
@@ -343,6 +458,230 @@ export function AgentComputer({
                 ) : (
                   <EmptyState icon={GitCompare} title="No changes yet" subtitle="Diffs appear here once the agent edits files." />
                 )}
+              </motion.div>
+            )}
+
+            {/* BROWSER / PREVIEW */}
+            {view === "browser" && (
+              <motion.div key="browser" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.16 }} className="h-full">
+                <div className="flex h-full flex-col rounded-2xl border border-stone-100/40 bg-white overflow-hidden shadow-[0_1px_8px_rgba(0,0,0,0.01)]">
+                  {/* Address bar */}
+                  <div className="flex shrink-0 items-center gap-1.5 border-b border-stone-100/60 bg-stone-50/50 px-3 py-2">
+                    <button
+                      onClick={() => setReloadKey((k) => k + 1)}
+                      disabled={!loadedUrl}
+                      title="Reload"
+                      className="shrink-0 rounded-md p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-600 disabled:opacity-40 disabled:hover:bg-transparent"
+                    >
+                      <RotateCw size={13} strokeWidth={1.6} />
+                    </button>
+                    <div className="flex flex-1 items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 ring-1 ring-stone-200/70">
+                      <Globe size={12} strokeWidth={1.6} className="shrink-0 text-stone-300" />
+                      <input
+                        value={urlInput}
+                        onChange={(e) => setUrlInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") navigate() }}
+                        placeholder="localhost:3000"
+                        spellCheck={false}
+                        className="min-w-0 flex-1 bg-transparent font-mono text-[11.5px] text-stone-600 outline-none placeholder:text-stone-300"
+                      />
+                    </div>
+                    <button
+                      onClick={() => {
+                        setCloneOpen((v) => !v)
+                        if (!cloneOpen) setCloneUrl(urlInput || loadedUrl || "")
+                      }}
+                      title="Copy this site — let the agent clone it (whole or just a part)"
+                      className={cn(
+                        "shrink-0 rounded-md p-1.5 transition-colors",
+                        cloneOpen ? "bg-stone-800 text-white hover:bg-stone-700" : "text-stone-400 hover:bg-stone-100 hover:text-stone-600",
+                      )}
+                    >
+                      <Copy size={13} strokeWidth={1.6} />
+                    </button>
+                    <button
+                      onClick={() => { setAnnotateMode((v) => !v); setSelRect(null) }}
+                      disabled={!loadedUrl}
+                      title={annotateMode ? "Cancel annotation" : "Select a region and tell the agent what to fix"}
+                      className={cn(
+                        "shrink-0 rounded-md p-1.5 transition-colors disabled:opacity-40 disabled:hover:bg-transparent",
+                        annotateMode ? "bg-stone-800 text-white hover:bg-stone-700" : "text-stone-400 hover:bg-stone-100 hover:text-stone-600",
+                      )}
+                    >
+                      <MessageSquarePlus size={13} strokeWidth={1.6} />
+                    </button>
+                    <button
+                      onClick={() => loadedUrl && window.open(loadedUrl, "_blank", "noopener,noreferrer")}
+                      disabled={!loadedUrl}
+                      title="Open in new tab"
+                      className="shrink-0 rounded-md p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-600 disabled:opacity-40 disabled:hover:bg-transparent"
+                    >
+                      <ExternalLink size={13} strokeWidth={1.6} />
+                    </button>
+                  </div>
+                  {/* Viewport */}
+                  <div ref={viewportRef} className="relative flex-1 overflow-hidden bg-stone-100/50">
+                    {loadedUrl ? (
+                      <>
+                        {/* Render at desktop width, scale down to the panel so
+                            responsive layouts show their desktop form. */}
+                        <iframe
+                          key={reloadKey}
+                          src={loadedUrl}
+                          title="Preview"
+                          className="border-0 bg-white origin-top-left"
+                          style={{
+                            width: `${PREVIEW_DESIGN_WIDTH}px`,
+                            height: previewScale > 0 ? `${viewportHeight / previewScale}px` : "100%",
+                            transform: `scale(${previewScale})`,
+                          }}
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                        />
+                        {/* Annotation overlay: drag a box, then write a note. */}
+                        {annotateMode && (
+                          <div
+                            className="absolute inset-0 z-10 cursor-crosshair bg-stone-900/5"
+                            onMouseDown={(e) => {
+                              const r = e.currentTarget.getBoundingClientRect()
+                              const x = e.clientX - r.left, y = e.clientY - r.top
+                              setDragStart({ x, y })
+                              setSelRect({ x, y, w: 0, h: 0 })
+                            }}
+                            onMouseMove={(e) => {
+                              if (!dragStart) return
+                              const r = e.currentTarget.getBoundingClientRect()
+                              const cx = e.clientX - r.left, cy = e.clientY - r.top
+                              setSelRect({
+                                x: Math.min(dragStart.x, cx),
+                                y: Math.min(dragStart.y, cy),
+                                w: Math.abs(cx - dragStart.x),
+                                h: Math.abs(cy - dragStart.y),
+                              })
+                            }}
+                            onMouseUp={() => setDragStart(null)}
+                          >
+                            {selRect && (selRect.w > 4 || selRect.h > 4) && (
+                              <div
+                                className="absolute rounded-sm border-2 border-stone-800 bg-stone-800/10 pointer-events-none"
+                                style={{ left: selRect.x, top: selRect.y, width: selRect.w, height: selRect.h }}
+                              />
+                            )}
+                          </div>
+                        )}
+                        {/* Note composer for the current selection. */}
+                        {annotateMode && (
+                          <div className="absolute bottom-3 left-3 right-3 z-20 flex items-end gap-2 rounded-xl border border-stone-200/70 bg-white/95 p-2 shadow-lg backdrop-blur-xl">
+                            <textarea
+                              value={note}
+                              onChange={(e) => setNote(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendAnnotation() }}
+                              placeholder={selRect && selRect.w > 4 ? "What should the agent change here?" : "Drag to select a region, then describe what to fix..."}
+                              rows={2}
+                              className="min-w-0 flex-1 resize-none bg-transparent px-1.5 py-1 text-[12px] text-stone-700 outline-none placeholder:text-stone-400"
+                            />
+                            <button
+                              onClick={sendAnnotation}
+                              disabled={!note.trim()}
+                              title="Send to agent (Ctrl/Cmd+Enter)"
+                              className="shrink-0 flex items-center gap-1.5 rounded-lg bg-stone-800 px-2.5 py-2 text-[11.5px] font-medium text-white transition-colors hover:bg-stone-700 disabled:opacity-40"
+                            >
+                              <Send size={12} strokeWidth={1.8} />
+                              Send
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <EmptyState
+                        icon={Globe}
+                        title="No preview yet"
+                        subtitle="When the agent starts a dev server, its URL appears here. Or type an address above to load it."
+                      />
+                    )}
+
+                    {/* Clone ("Copy") overlay — floats over the viewport so it
+                        never pushes the toolbar/iframe layout around. */}
+                    {cloneOpen && (
+                      <div className="absolute inset-0 z-30 flex items-center justify-center bg-stone-900/20 backdrop-blur-[2px] p-4">
+                        <div className="w-full max-w-[340px] rounded-2xl border border-stone-100/40 bg-white p-5 shadow-[0_8px_30px_rgba(0,0,0,0.08)]">
+                          <div className="mb-1 flex items-center gap-2">
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-stone-100 text-stone-500">
+                              <Copy size={13} strokeWidth={1.7} />
+                            </div>
+                            <div className="flex flex-col leading-tight">
+                              <span className="text-[13px] font-medium text-stone-700">Copy a site</span>
+                              <span className="text-[11px] text-stone-400">The agent recreates it for you</span>
+                            </div>
+                            <button
+                              onClick={() => setCloneOpen(false)}
+                              className="ml-auto rounded-lg p-1.5 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-600"
+                            >
+                              <X size={14} strokeWidth={1.6} />
+                            </button>
+                          </div>
+
+                          <label className="mt-4 block text-[10px] font-medium uppercase tracking-widest text-stone-400">Site URL</label>
+                          <div className="mt-1.5 flex items-center gap-2 rounded-xl bg-stone-50/70 px-3 py-2.5 ring-1 ring-stone-200/60 focus-within:ring-stone-300">
+                            <Globe size={13} strokeWidth={1.6} className="shrink-0 text-stone-300" />
+                            <input
+                              value={cloneUrl}
+                              onChange={(e) => setCloneUrl(e.target.value)}
+                              placeholder="https://site-you-like.com"
+                              spellCheck={false}
+                              autoFocus
+                              className="min-w-0 flex-1 bg-transparent font-mono text-[12px] text-stone-700 outline-none placeholder:text-stone-300"
+                            />
+                          </div>
+
+                          <label className="mt-4 block text-[10px] font-medium uppercase tracking-widest text-stone-400">What to copy</label>
+                          <div className="mt-1.5 grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => setCloneScope("whole")}
+                              className={cn(
+                                "rounded-xl px-3 py-2.5 text-left transition-colors ring-1",
+                                cloneScope === "whole" ? "bg-stone-100 ring-stone-300" : "bg-white ring-stone-200/60 hover:ring-stone-300",
+                              )}
+                            >
+                              <span className={cn("block text-[12px] font-medium", cloneScope === "whole" ? "text-stone-800" : "text-stone-600")}>Whole site</span>
+                              <span className="mt-0.5 block text-[10.5px] leading-snug text-stone-400">Full layout &amp; pages</span>
+                            </button>
+                            <button
+                              onClick={() => setCloneScope("part")}
+                              className={cn(
+                                "rounded-xl px-3 py-2.5 text-left transition-colors ring-1",
+                                cloneScope === "part" ? "bg-stone-100 ring-stone-300" : "bg-white ring-stone-200/60 hover:ring-stone-300",
+                              )}
+                            >
+                              <span className={cn("block text-[12px] font-medium", cloneScope === "part" ? "text-stone-800" : "text-stone-600")}>Just a part</span>
+                              <span className="mt-0.5 block text-[10.5px] leading-snug text-stone-400">A section or style</span>
+                            </button>
+                          </div>
+
+                          <label className="mt-4 block text-[10px] font-medium uppercase tracking-widest text-stone-400">
+                            {cloneScope === "whole" ? "Notes (optional)" : "What do you like?"}
+                          </label>
+                          <textarea
+                            value={cloneWhat}
+                            onChange={(e) => setCloneWhat(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendClone() }}
+                            placeholder={cloneScope === "whole" ? "Anything to emphasize?" : "e.g. the hero section, the pricing cards, the color scheme"}
+                            rows={2}
+                            className="mt-1.5 w-full resize-none rounded-xl bg-stone-50/70 px-3 py-2.5 text-[12px] text-stone-700 outline-none ring-1 ring-stone-200/60 placeholder:text-stone-400 focus:ring-stone-300"
+                          />
+
+                          <button
+                            onClick={sendClone}
+                            disabled={!cloneUrl.trim() || (cloneScope === "part" && !cloneWhat.trim())}
+                            className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-xl bg-stone-800 px-3 py-2.5 text-[12.5px] font-medium text-white transition-colors hover:bg-stone-700 disabled:opacity-40 disabled:hover:bg-stone-800"
+                          >
+                            <Send size={13} strokeWidth={1.8} />
+                            Send to agent
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>

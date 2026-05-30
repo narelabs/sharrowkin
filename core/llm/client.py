@@ -672,6 +672,25 @@ class GeminiClient:
         if len(words) <= 8 and any(clean.startswith(g) for g in all_patterns):
             print(f"[INTENT] Heuristic prefix match: '{task}' -> conversational")
             return {"is_conversational": True, "is_informational": False, "response": None}
+
+        # Retrospective / meta questions about what the agent already did.
+        # These must be answered from conversation history, NOT by launching a
+        # full repo scan (the old behaviour: "а что ты сделал" → informational
+        # cycle over 160 files). Routed to conversational so the LLM replies
+        # using _format_history context.
+        retrospective_phrases = {
+            "что ты сделал", "что сделал", "что ты делал", "что было сделано",
+            "что ты изменил", "что изменил", "что поменял", "что ты поменял",
+            "что ты натворил", "что нового сделал", "какие изменения",
+            "что ты только что сделал", "что ты сейчас сделал", "че сделал",
+            "чо сделал", "что там сделал", "покажи что сделал",
+            "what did you do", "what have you done", "what did you change",
+            "what changed", "what was changed", "what did you just do",
+            "summarize what you did", "recap", "what was done",
+        }
+        if any(p in clean for p in retrospective_phrases):
+            print(f"[INTENT] Retrospective question: '{task}' -> conversational")
+            return {"is_conversational": True, "is_informational": False, "response": None}
         
         # Informational/read-only request heuristics (requests to explain, analyze, or study the project)
         info_keywords = {

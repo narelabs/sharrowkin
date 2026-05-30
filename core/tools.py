@@ -447,6 +447,124 @@ def git_diff(workspace: Path) -> str:
     return result.stdout
 
 
+# Local-only git: read/inspect + stage/commit/branch. Deliberately excludes
+# push/pull/fetch/remote (network) and reset/clean/rebase (history/tree
+# destruction). The agent commits locally; a human pushes. This runs git via
+# direct subprocess (like git_diff), which is why it works even though "git" is
+# in BLOCKED_COMMAND_TOKENS — arbitrary `run_command` git stays blocked, only
+# this audited path is allowed.
+_GIT_ALLOWED_SUBCOMMANDS = {
+    "status", "diff", "log", "show", "add", "commit",
+    "branch", "checkout", "rev-parse", "init",
+}
+
+
+def run_git(workspace: Path, args: list[str], timeout_seconds: int = 30) -> TestResult:
+    """Run a whitelisted git subcommand via direct subprocess.
+
+    Returns a TestResult (success/exit_code/output). The first element of
+    ``args`` must be an allowed subcommand. ``checkout`` is restricted to
+    creating a new branch (``checkout -b <name>``) so the agent can't clobber
+    the working tree by switching to an existing ref.
+    """
+    if not args:
+        return TestResult(success=False, exit_code=-2, output="git: no subcommand given")
+    sub = args[0]
+    if sub not in _GIT_ALLOWED_SUBCOMMANDS:
+        return TestResult(
+            success=False, exit_code=-2,
+            output=(
+                f"git subcommand '{sub}' is not allowed. Allowed: "
+                f"{', '.join(sorted(_GIT_ALLOWED_SUBCOMMANDS))}. "
+                "Network (push/pull/fetch) and destructive (reset/clean/rebase) "
+                "operations are intentionally blocked."
+            ),
+        )
+    if sub == "checkout":
+        # Only `checkout -b <branch>` (create new branch) is permitted.
+        if len(args) < 2 or args[1] != "-b":
+            return TestResult(
+                success=False, exit_code=-2,
+                output="Only 'checkout -b <branch>' is allowed (creating a new branch).",
+            )
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=workspace,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return TestResult(success=False, exit_code=-1, output=f"git {sub}: timed out after {timeout_seconds}s")
+    except FileNotFoundError:
+        return TestResult(success=False, exit_code=-1, output="git is not installed or not on PATH")
+    output = (result.stdout or "")[-12_000:]
+    return TestResult(success=result.returncode == 0, exit_code=result.returncode, output=output)
+
+
+def detect_and_verify(workspace: Path, timeout_seconds: int = 300) -> TestResult:
+    """Auto-detect project type and run available lint/typecheck/build checks.
+
+    Complements run_pytest. Detects by marker files and only runs a check when
+    its tooling/config is actually present, so it stays quiet on projects that
+    don't use a given tool. Aggregates all results into one TestResult.
+    """
+    checks: list[tuple[str, str]] = []  # (label, command)
+
+    # --- Python ---
+    if (workspace / "pyproject.toml").exists() or any(workspace.glob("*.py")):
+        ruff_cfg = (
+            (workspace / "ruff.toml").exists()
+            or (workspace / ".ruff.toml").exists()
+            or "ruff" in _read_text_safe(workspace / "pyproject.toml")
+        )
+        if ruff_cfg:
+            checks.append(("ruff", "ruff check ."))
+        pyproject = _read_text_safe(workspace / "pyproject.toml")
+        if (workspace / "mypy.ini").exists() or "[tool.mypy]" in pyproject:
+            checks.append(("mypy", "python -m mypy ."))
+
+    # --- JS/TS ---
+    pkg_path = workspace / "package.json"
+    if pkg_path.exists():
+        pkg = _read_text_safe(pkg_path)
+        if (workspace / "tsconfig.json").exists():
+            checks.append(("tsc", "npx --no-install tsc --noEmit"))
+        if '"lint"' in pkg:
+            checks.append(("lint", "npm run lint --if-present"))
+        if '"build"' in pkg:
+            checks.append(("build", "npm run build --if-present"))
+
+    if not checks:
+        return TestResult(success=True, exit_code=0, output="No lint/typecheck/build tooling detected — nothing to verify.")
+
+    sections: list[str] = []
+    overall_ok = True
+    for label, command in checks:
+        res = run_terminal_command(workspace, command, timeout_seconds=timeout_seconds)
+        status = "OK" if res.success else f"FAILED (exit {res.exit_code})"
+        if not res.success:
+            overall_ok = False
+        body = (res.output or "(no output)")[-4000:]
+        sections.append(f"=== {label}: {status} ===\n{body}")
+
+    return TestResult(
+        success=overall_ok,
+        exit_code=0 if overall_ok else 1,
+        output="\n\n".join(sections),
+    )
+
+
+def _read_text_safe(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
 def run_pytest(workspace: Path, timeout_seconds: int = 300) -> TestResult:
     """
     Run pytest test suite in the workspace directory.
@@ -563,6 +681,16 @@ def run_terminal_command(workspace: Path, command: str, timeout_seconds: int = 1
         is_windows = platform.system() == "Windows"
         
         if is_windows:
+            # Block dangerous commands on the ORIGINAL command first — before any
+            # Unix→Windows translation. Otherwise `rm -rf .` would be rewritten to
+            # `rmdir /s /q .` and slip past the blocklist (rm is blocked, rmdir is
+            # not), actually executing a destructive delete.
+            raw_tokens = command.lower().split()
+            if raw_tokens:
+                blocked = BLOCKED_COMMAND_TOKENS & {Path(part).name.lower() for part in raw_tokens}
+                if blocked:
+                    return TestResult(success=False, exit_code=-2, output=f"Command blocked: {', '.join(sorted(blocked))}")
+
             # Translate common Unix commands to Windows equivalents
             win_translations = {
                 "pwd": "cd",
@@ -578,20 +706,21 @@ def run_terminal_command(workspace: Path, command: str, timeout_seconds: int = 1
                 "clear": "cls",
                 "which": "where",
             }
-            
+
             cmd_lower = command.strip().lower()
             for unix_cmd, win_cmd in win_translations.items():
                 if cmd_lower == unix_cmd or cmd_lower.startswith(unix_cmd + " "):
                     command = win_cmd + command[len(unix_cmd):]
                     break
-            
-            # Check for blocked commands
+
+            # Re-check after translation as defense in depth (catches a Windows
+            # command that maps onto a blocked token).
             blocked_check = command.lower().split()
             if blocked_check:
                 blocked = BLOCKED_COMMAND_TOKENS & {Path(part).name.lower() for part in blocked_check}
                 if blocked:
                     return TestResult(success=False, exit_code=-2, output=f"Command blocked: {', '.join(sorted(blocked))}")
-            
+
             result = subprocess.run(
                 command,
                 cwd=workspace,

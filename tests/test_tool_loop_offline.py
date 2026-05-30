@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.llm.client import ChatTurn, ToolCallRequest
+from core.llm.client import ChatTurn, ToolCallRequest, GeminiClient
 from agent.agent_tools import AgentToolbox
 from agent.tool_loop import ToolLoop
 
@@ -25,8 +25,10 @@ class ScriptedClient:
     def __init__(self, turns):
         self._turns = list(turns)
         self.calls = 0
+        self.last_system = None  # captures the system prompt of the latest call
 
     async def chat_with_tools(self, messages, tools, system, **kwargs):
+        self.last_system = system
         turn = self._turns[min(self.calls, len(self._turns) - 1)]
         self.calls += 1
         return turn
@@ -67,7 +69,8 @@ async def test_happy_path():
                                 args={"summary": "Created hello.py with a hello() function."})
             ]),
         ]
-        loop = ToolLoop(ScriptedClient(script), AgentToolbox(ws), max_steps=10)
+        client = ScriptedClient(script)
+        loop = ToolLoop(client, AgentToolbox(ws), max_steps=10)
         events = [e async for e in loop.run("создай файл hello.py с функцией hello", "(empty)")]
 
         assert (ws / "hello.py").exists(), "file was NOT created on disk"
@@ -76,6 +79,10 @@ async def test_happy_path():
         assert "hello" in loop.final_summary.lower()
         tool_events = [e for e in events if e.get("type") == "tool_call"]
         assert any(e["tool"] == "write_file" for e in tool_events)
+        # The workspace root must be injected into the system prompt, and the
+        # scope-discipline section must be present.
+        assert str(ws) in client.last_system, "workspace path not injected into system prompt"
+        assert "Scope discipline" in client.last_system, "scope-discipline section missing from prompt"
         print(f"  happy_path: OK — file created, {len(events)} events, {loop.steps_taken} steps")
 
 
@@ -123,11 +130,84 @@ async def test_str_replace_requires_match():
         print("  str_replace_requires_match: OK — miss rejected, unique match applied")
 
 
+async def test_auto_extends_past_step_limit():
+    """The loop must keep working past max_steps (auto-extend) instead of
+    stopping, and finish when attempt_completion finally arrives."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Path(tmp)
+        tb = AgentToolbox(ws)
+
+        # A long run of read_file calls (never completing) that exceeds the
+        # first step batch, then a real edit + completion.
+        keep_busy = [
+            _turn("checking", [
+                ToolCallRequest(id=f"r{i}", name="read_file", args={"path": "nope.txt"})
+            ])
+            for i in range(7)
+        ]
+        finish = [
+            _turn("now editing", [
+                ToolCallRequest(id="w", name="write_file",
+                                args={"path": "out.txt", "content": "done\n"})
+            ]),
+            _turn("", [
+                ToolCallRequest(id="done", name="attempt_completion",
+                                args={"completion_summary": "Finished after extension."})
+            ]),
+        ]
+        client = ScriptedClient(keep_busy + finish)
+        # Tiny batch so we cross the limit quickly; allow extensions.
+        loop = ToolLoop(client, tb, max_steps=3, max_extensions=4)
+
+        extended = False
+        async for ev in loop.run(task="explain the project", initial_context=""):
+            if ev.get("type") == "log" and "extending and continuing" in ev.get("message", ""):
+                extended = True
+
+        assert extended, "loop should have logged an extension past the step limit"
+        assert loop.success, "loop should succeed once completion arrives"
+        assert loop.steps_taken > 3, f"expected to run past first batch, got {loop.steps_taken}"
+        assert (ws / "out.txt").exists(), "the post-extension edit should have happened"
+        print(f"  auto_extends_past_step_limit: OK — ran {loop.steps_taken} steps, extended, then completed")
+
+
+async def test_intent_triage():
+    """Retrospective/meta questions must route to conversational (answered from
+    history), never to the informational repo-scan cycle. Real coding and
+    analysis requests must keep their classification."""
+    client = GeminiClient(api_key=None)  # unconfigured: heuristics short-circuit
+
+    retrospective = [
+        "а что ты сделал",
+        "что ты сделал?",
+        "what did you do",
+        "what changed?",
+        "что было сделано",
+    ]
+    for q in retrospective:
+        intent = await client.classify_intent(q)
+        assert intent["is_conversational"] is True, f"{q!r} should be conversational, got {intent}"
+        assert intent["is_informational"] is False, f"{q!r} must NOT trigger info scan, got {intent}"
+
+    # A genuine analysis request stays informational.
+    info = await client.classify_intent("изучи проект и объясни архитектуру")
+    assert info["is_informational"] is True and not info["is_conversational"], f"info misrouted: {info}"
+
+    # A genuine coding request is neither conversational nor informational.
+    coding = await client.classify_intent("создай файл hello.py с функцией hello")
+    assert not coding["is_conversational"] and not coding["is_informational"], f"coding misrouted: {coding}"
+
+    await client.close()
+    print("  intent_triage: OK — retrospective->chat, analysis->info, coding->task")
+
+
 async def main():
     print("Running ToolLoop offline tests...")
     await test_happy_path()
     await test_rejects_empty_completion()
     await test_str_replace_requires_match()
+    await test_auto_extends_past_step_limit()
+    await test_intent_triage()
     print("ALL TESTS PASSED")
 
 

@@ -25,6 +25,10 @@ class MemoryConfig(BaseModel):
 
 class ExecutionConfig(BaseModel):
     max_iterations: int = 30
+    # When the step budget runs out without an explicit completion, the loop
+    # auto-grants another batch of max_iterations instead of stopping, up to
+    # this many times. Hard ceiling = max_iterations * (1 + max_extensions).
+    max_extensions: int = 4
     strict_mode: bool = True
     enable_semantic_graph: bool = True
     ui_delays_enabled: bool = False  # ✅ NEW: Disable UI delays for production

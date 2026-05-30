@@ -22,6 +22,8 @@ def test_shell_control_tokens():
 
 def test_symbol_summary_creation():
     """Test SymbolSummary dataclass creation."""
-    summary = SymbolSummary(kind="function", name="test_func")
+    summary = SymbolSummary(kind="function", name="test_func", signature="(x)", line=10)
     assert summary.kind == "function"
     assert summary.name == "test_func"
+    assert summary.signature == "(x)"
+    assert summary.line == 10

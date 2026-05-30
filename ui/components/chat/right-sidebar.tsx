@@ -315,14 +315,29 @@ export function RightSidebar({
                 <div className="space-y-1">
                   <div className="text-[11px] font-medium text-stone-400 uppercase tracking-widest mb-2 font-sans">Phases</div>
                   {phases.map((phase, i) => (
-                    <div key={phase.id || i} className="flex items-center gap-2.5 py-1.5">
+                    <div
+                      key={phase.id || i}
+                      className={cn(
+                        "flex items-center gap-2.5 py-2 px-2 rounded-lg transition-colors",
+                        phase.status === "running" && "bg-stone-50",
+                      )}
+                    >
                       {getPhaseIcon(phase.status)}
                       <div className="flex-1 min-w-0">
-                        <span className="text-[12px] text-stone-600 font-sans truncate block">{phase.label}</span>
+                        <span className={cn(
+                          "text-[12px] font-sans truncate block",
+                          phase.status === "running" ? "text-stone-700 font-medium" : "text-stone-500",
+                          phase.status === "error" && "text-red-500",
+                        )}>{phase.label}</span>
                         {phase.description && (
                           <span className="text-[10px] text-stone-400 font-sans truncate block">{phase.description}</span>
                         )}
                       </div>
+                      {phase.completedAt && phase.startedAt && (
+                        <span className="text-[10px] font-mono text-stone-300 shrink-0">
+                          {formatDuration(new Date(phase.completedAt).getTime() - new Date(phase.startedAt).getTime())}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { MessageBubble } from "./message-bubble"
 import type { Message } from "./chat-shell"
 import { TypingIndicator } from "./typing-indicator"
-import { AlertCircle, Bot, RefreshCw, ArrowDown } from "lucide-react"
+import { AlertCircle, Bot, RefreshCw, ArrowDown, ListTodo, FileCode, FlaskConical, GitBranch } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 interface MessageListProps {
@@ -125,24 +125,7 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded, o
     >
       {/* Empty state */}
       {messages.length === 0 && !error && !isStreaming && (
-        <div className="flex flex-col items-center justify-center h-full text-center text-stone-400 relative">
-          {/* Subtle floating particles */}
-          <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-20">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <div
-                key={i}
-                className="absolute w-2 h-2 rounded-full animate-float-slow"
-                style={{
-                  left: `${20 + Math.random() * 60}%`,
-                  top: `${20 + Math.random() * 60}%`,
-                  background: `linear-gradient(to bottom, #F7B2FB 50%, #786EF1 80%, #5588FB 100%)`,
-                  animationDelay: `${i * 0.5}s`,
-                  animationDuration: `${4 + i * 0.5}s`
-                }}
-              />
-            ))}
-          </div>
-
+        <div className="flex flex-col items-center justify-center h-full text-center text-stone-400 relative px-4">
           <div className="relative mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/80 transition-all duration-300 hover:-translate-y-[2px]">
             <Bot size={22} strokeWidth={1.5} className="text-stone-600 relative z-10" />
           </div>
@@ -153,6 +136,24 @@ export function MessageList({ messages, isStreaming, error, onRetry, isLoaded, o
           <p className="text-[14px] mt-2 text-stone-400 font-normal leading-relaxed max-w-[360px]">
             Describe a repository task. The agent will plan, edit, run checks, and report progress in the thread.
           </p>
+
+          {/* Capability pills — match the composer's quick-action chip token */}
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-1.5 max-w-[400px]">
+            {[
+              { icon: ListTodo, label: "Plans" },
+              { icon: FileCode, label: "Edits code" },
+              { icon: FlaskConical, label: "Runs checks" },
+              { icon: GitBranch, label: "Commits" },
+            ].map(({ icon: Icon, label }) => (
+              <span
+                key={label}
+                className="inline-flex items-center gap-1.5 rounded-full bg-stone-100/60 px-3.5 py-1.5 text-[12.5px] font-normal text-stone-500"
+              >
+                <Icon size={13} strokeWidth={1.5} className="text-stone-400" />
+                {label}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 

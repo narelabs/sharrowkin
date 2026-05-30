@@ -123,7 +123,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="h-dvh overflow-hidden bg-white text-stone-900 flex">
+    <div className="h-full overflow-hidden bg-white text-stone-900 flex">
       <Suspense>
         <LeftSidebar isOpen={leftSidebarOpen} onToggle={() => setLeftSidebarOpen(!leftSidebarOpen)} />
       </Suspense>

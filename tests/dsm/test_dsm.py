@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from memory.dsm.core.memory import DynamicSegmentedMemory
+from memory.dsm.core.memory import DynamicSegmentedMemory, sparse_attention_cost
 
 
 def test_write_route_active_context(tmp_path: Path) -> None:

@@ -954,7 +954,13 @@ class SharrowkinAgent:
                         "- Local filesystem: read, write, edit files in the workspace\n"
                         "- Terminal commands: run tests, linters, build tools, git commands\n"
                         "- AST analysis: understand code structure and dependencies\n"
-                        "- Memory systems: DSM, RLD, TraceMemory for context and learning"
+                        "- Memory systems: DSM, RLD, TraceMemory for context and learning\n"
+                        "- Live Preview browser (Agent Computer): when you start a web/dev server "
+                        "(e.g. `npm run dev`, `python -m http.server`, vite, next), the user sees the "
+                        "running site in a Preview tab. The server URL you print to the terminal "
+                        "(http://localhost:PORT or 127.0.0.1:PORT) is detected automatically and opened "
+                        "there — so to SHOW a result, start a server and let its URL print; do not just "
+                        "open a raw .html file. Prefer a stable port and keep the server running."
                     )
                     self.conversation_history.append({"role": "system", "content": system_prompt})
                     print(f"[DEBUG] Added system prompt to conversation history")

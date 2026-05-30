@@ -44,7 +44,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" data-theme="dark">
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans antialiased bg-[#f8f8fa] text-stone-800`}>
         <Providers>
           <div className="flex h-full flex-col overflow-hidden">
